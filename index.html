@@ -66,12 +66,11 @@ p { font-size: 13px; color: var(--text-light); }
 .product-item .prod-price { font-weight: 700; color: var(--primary); font-size: 14px; }
 .prod-actions { display: flex; gap: 6px; }
 .form-input { width: 100%; padding: 14px; border: 1px solid var(--border); border-radius: 12px; margin-bottom: 12px; font-size: 14px; outline: none; font-family: inherit; background: #fff; }
-.form-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(15,23,42,0.1); }
 .form-label { font-size: 12px; color: var(--text-light); margin-bottom: 6px; display: block; font-weight: 500; }
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: flex-end; justify-content: center; }
 .sheet { background: #fff; width: 100%; max-width: 480px; border-radius: 24px 24px 0 0; padding: 24px; max-height: 92vh; overflow-y: auto; }
 .sheet h3 { margin-bottom: 16px; font-size: 20px; }
-.toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); background: var(--primary); color: #fff; padding: 12px 24px; border-radius: 30px; font-size: 13px; z-index: 9999; opacity: 0; transition: opacity 0.3s, transform 0.3s; pointer-events: none; box-shadow: 0 4px 12px rgba(0,0,0,0.2); max-width: 90%; text-align: center; }
+.toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); background: var(--primary); color: #fff; padding: 12px 24px; border-radius: 30px; font-size: 13px; z-index: 9999; opacity: 0; transition: opacity 0.3s, transform 0.3s; pointer-events: none; max-width: 90%; text-align: center; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(-10px); }
 .empty { text-align: center; color: var(--text-light); padding: 60px 0; font-size: 14px; }
 .empty .big { font-size: 56px; display: block; margin-bottom: 16px; }
@@ -87,10 +86,7 @@ p { font-size: 13px; color: var(--text-light); }
 <body>
 <div id="splash"><h1>SYEDGO</h1><p>Merchant Partner</p><div class="loader"></div></div>
 <div class="app">
-  <header class="topbar">
-    <div><div style="font-size:11px;opacity:0.7;">Merchant Panel</div><h1 id="storeNameTop">SYEDGO Merchant</h1></div>
-    <div class="status" id="openToggle" onclick="toggleOpen()">Closed</div>
-  </header>
+  <header class="topbar"><div><div style="font-size:11px;opacity:0.7;">Merchant Panel</div><h1 id="storeNameTop">SYEDGO Merchant</h1></div><div class="status" id="openToggle" onclick="toggleOpen()">Closed</div></header>
   <main id="app"></main>
   <nav class="bottom-nav">
     <button data-tab="home" class="active">🏠<span class="lbl">Home</span></button>
@@ -105,194 +101,125 @@ p { font-size: 13px; color: var(--text-light); }
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
-  import { getFirestore, doc, setDoc, getDoc, collection, query, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+  import { getFirestore, doc, setDoc, getDoc, collection, query, where, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 
   const firebaseConfig = { apiKey: "AIzaSyDGykbkZ4ITxkEgcxaQNZlH9rFO86c-xEU", authDomain: "syedgo-2027.firebaseapp.com", projectId: "syedgo-2027", storageBucket: "syedgo-2027.firebasestorage.app", messagingSenderId: "827702342584", appId: "1:827702342584:web:a3d717e8b1bcf93529954d", measurementId: "G-L0B1K6N1EY" };
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
 
-  const CATEGORIES = [
-    { key: "Restaurant", emoji: "🍔", label: "Restaurant / Fast Food" },
-    { key: "Supermarket", emoji: "🛒", label: "Supermarket / Grocery" },
-    { key: "Pharmacy", emoji: "💊", label: "Pharmacy" },
-    { key: "Fruits & Veg", emoji: "🍎", label: "Fruits & Vegetables" },
-    { key: "Bakery", emoji: "🥐", label: "Bakery" },
-    { key: "Other", emoji: "🏪", label: "Other" }
-  ];
-  const COMMISSION_RATE = 0.10;
+  const CATEGORIES = [{ key: "Restaurant", emoji: "🍔", label: "Restaurant / Fast Food" },{ key: "Supermarket", emoji: "🛒", label: "Supermarket / Grocery" },{ key: "Pharmacy", emoji: "💊", label: "Pharmacy" },{ key: "Fruits & Veg", emoji: "🍎", label: "Fruits & Vegetables" },{ key: "Bakery", emoji: "🥐", label: "Bakery" },{ key: "Other", emoji: "🏪", label: "Other" }];
 
   let state = {
     tab: "home",
     merchant: JSON.parse(localStorage.getItem("syedgo_merchant")) || null,
     isOpen: localStorage.getItem("syedgo_merchant_open") === "true",
-    orders: [],
-    products: [],
-    payouts: JSON.parse(localStorage.getItem("syedgo_merchant_payouts")) || [],
-    ordersListener: null
+    orders: [], products: [], payouts: [],
+    commissionRate: 10,
+    ordersListener: null, payoutsListener: null, settingsListener: null
   };
 
   function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(window._t); window._t = setTimeout(() => t.classList.remove("show"), 2500); }
   function closeModal() { document.getElementById("modalRoot").innerHTML = ""; }
-  function saveLocal() {
-    if (state.merchant) localStorage.setItem("syedgo_merchant", JSON.stringify(state.merchant));
-    localStorage.setItem("syedgo_merchant_open", state.isOpen);
-    localStorage.setItem("syedgo_merchant_payouts", JSON.stringify(state.payouts));
-  }
+  function saveLocal() { if (state.merchant) localStorage.setItem("syedgo_merchant", JSON.stringify(state.merchant)); localStorage.setItem("syedgo_merchant_open", state.isOpen); }
 
-  function updateOpenStatus() {
-    const el = document.getElementById("openToggle");
-    el.textContent = state.isOpen ? "🟢 Open" : "🔴 Closed";
-    el.classList.toggle("open", state.isOpen);
-  }
+  function updateOpenStatus() { const el = document.getElementById("openToggle"); el.textContent = state.isOpen ? "🟢 Open" : "🔴 Closed"; el.classList.toggle("open", state.isOpen); }
+  function toggleOpen() { if (!state.merchant) return toast("Login first"); state.isOpen = !state.isOpen; saveLocal(); updateOpenStatus(); toast(state.isOpen ? "Open" : "Closed"); }
 
-  function toggleOpen() {
-    if (!state.merchant) return toast("Please login first");
-    state.isOpen = !state.isOpen; saveLocal(); updateOpenStatus();
-    toast(state.isOpen ? "Store is now Open" : "Store is now Closed");
+  function loadSettings() {
+    if (state.settingsListener) state.settingsListener();
+    state.settingsListener = onSnapshot(doc(db, "settings", "global"), (snap) => {
+      if (snap.exists()) {
+        state.commissionRate = snap.data().commissionRate || 10;
+        if (state.tab === "earnings" || state.tab === "home") render();
+      }
+    });
   }
 
   function loadOrders() {
     if (!state.merchant) return;
     if (state.ordersListener) { state.ordersListener(); state.ordersListener = null; }
-    const ordersQuery = query(collection(db, "orders"));
-    state.ordersListener = onSnapshot(ordersQuery, (snapshot) => {
+    state.ordersListener = onSnapshot(query(collection(db, "orders")), (snapshot) => {
       const myOrders = [];
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        const items = data.items || [];
-        const belongsToMe = items.some(item => item.shopName && item.shopName.toLowerCase() === state.merchant.storeName.toLowerCase());
-        if (belongsToMe) myOrders.push({ id: docSnap.id, ...data });
-      });
+      snapshot.forEach((docSnap) => { const data = docSnap.data(); const items = data.items || []; const belongsToMe = items.some(item => item.shopName && item.shopName.toLowerCase() === state.merchant.storeName.toLowerCase()); if (belongsToMe) myOrders.push({ id: docSnap.id, ...data }); });
       myOrders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-      // Detect status changes for notifications
       const prevOrders = state.orders || [];
       myOrders.forEach(newOrd => {
         const oldOrd = prevOrders.find(o => o.id === newOrd.id);
         if (oldOrd) {
-          if (oldOrd.status === "Ready for Pickup" && newOrd.status === "Rider Assigned" && newOrd.rider) {
-            toast(`🛵 ${newOrd.rider.name} accepted order #${newOrd.id}!`);
-          } else if (oldOrd.status !== "Delivered" && newOrd.status === "Delivered") {
-            toast(`✅ Order #${newOrd.id} delivered!`);
-          }
-        } else {
-          if (newOrd.status === "Placed") toast(`🔔 New order #${newOrd.id}!`);
-        }
+          if (oldOrd.status === "Ready for Pickup" && newOrd.status === "Rider Assigned" && newOrd.rider) toast(`🛵 ${newOrd.rider.name} accepted order #${newOrd.id}!`);
+          else if (oldOrd.status !== "Delivered" && newOrd.status === "Delivered") toast(`✅ Order #${newOrd.id} delivered!`);
+        } else if (newOrd.status === "Placed") toast(`🔔 New order #${newOrd.id}!`);
       });
-
       state.orders = myOrders;
       updateOrderBadge();
       if (state.tab === "home" || state.tab === "orders") render();
-    }, (err) => { console.error(err); });
+    });
   }
 
-  function updateOrderBadge() {
-    const pending = state.orders.filter(o => o.status === "Placed").length;
-    const badge = document.getElementById("orderBadge");
-    if (pending > 0) { badge.textContent = pending; badge.classList.remove("hidden"); } else badge.classList.add("hidden");
-  }
-
-  async function acceptOrder(orderId) {
-    try { await updateDoc(doc(db, "orders", orderId), { status: "Accepted by Store", acceptedAt: new Date().toISOString() }); toast("Order accepted ✅"); }
-    catch (e) { console.error(e); toast("Failed to accept"); }
-  }
-
-  async function rejectOrder(orderId) {
-    if (!confirm("Reject this order?")) return;
-    try { await updateDoc(doc(db, "orders", orderId), { status: "Rejected", rejectedAt: new Date().toISOString(), rejectedBy: "Merchant" }); toast("Order rejected ❌"); }
-    catch (e) { console.error(e); toast("Failed to reject"); }
-  }
-
-  async function markReady(orderId) {
-    try { await updateDoc(doc(db, "orders", orderId), { status: "Ready for Pickup", readyAt: new Date().toISOString() }); toast("Marked ready! Riders notified 🛵"); }
-    catch (e) { console.error(e); toast("Failed to update"); }
-  }
-
-  async function saveProducts() {
+  function loadPayouts() {
     if (!state.merchant) return;
-    try { await setDoc(doc(db, "merchants", state.merchant.phone), { merchant: state.merchant, products: state.products, updatedAt: new Date().toISOString() }, { merge: true }); }
-    catch (e) { console.error(e); }
+    if (state.payoutsListener) state.payoutsListener();
+    state.payoutsListener = onSnapshot(query(collection(db, "payouts"), where("merchantPhone", "==", state.merchant.phone)), (snap) => {
+      const arr = [];
+      snap.forEach(d => arr.push({ id: d.id, ...d.data() }));
+      arr.sort((a, b) => new Date(b.requestedAt) - new Date(a.requestedAt));
+      state.payouts = arr;
+      if (state.tab === "earnings") render();
+    });
   }
+
+  function updateOrderBadge() { const pending = state.orders.filter(o => o.status === "Placed").length; const badge = document.getElementById("orderBadge"); if (pending > 0) { badge.textContent = pending; badge.classList.remove("hidden"); } else badge.classList.add("hidden"); }
+
+  async function acceptOrder(orderId) { try { await updateDoc(doc(db, "orders", orderId), { status: "Accepted by Store", acceptedAt: new Date().toISOString() }); toast("Accepted ✅"); } catch (e) { toast("Failed"); } }
+  async function rejectOrder(orderId) { if (!confirm("Reject this order?")) return; try { await updateDoc(doc(db, "orders", orderId), { status: "Rejected", rejectedAt: new Date().toISOString(), rejectedBy: "Merchant" }); toast("Rejected ❌"); } catch (e) { toast("Failed"); } }
+  async function markReady(orderId) { try { await updateDoc(doc(db, "orders", orderId), { status: "Ready for Pickup", readyAt: new Date().toISOString() }); toast("Ready! Riders notified 🛵"); } catch (e) { toast("Failed"); } }
+
+  async function saveProducts() { if (!state.merchant) return; try { await setDoc(doc(db, "merchants", state.merchant.phone), { merchant: state.merchant, products: state.products, updatedAt: new Date().toISOString() }, { merge: true }); } catch (e) { console.error(e); } }
 
   function addProductModal(editId = null) {
     const p = editId ? state.products.find(x => String(x.id) === String(editId)) : null;
-    document.getElementById("modalRoot").innerHTML = `
-      <div class="overlay" onclick="if(event.target===this)closeModal()">
-        <div class="sheet">
-          <h3>${p ? 'Edit Product' : 'Add New Product'}</h3>
-          <label class="form-label">Product Name</label>
-          <input class="form-input" id="pName" placeholder="e.g. Zinger Burger" value="${p ? p.name : ''}" />
-          <label class="form-label">Description</label>
-          <input class="form-input" id="pDesc" placeholder="e.g. Crispy chicken burger" value="${p ? p.desc : ''}" />
-          <label class="form-label">Price (PKR)</label>
-          <input class="form-input" id="pPrice" type="number" placeholder="e.g. 550" value="${p ? p.price : ''}" />
-          <label class="form-label">Category</label>
-          <input class="form-input" id="pCat" placeholder="e.g. Burgers, Drinks" value="${p ? p.category || '' : ''}" />
-          <div class="toggle-row"><span>In Stock</span><div class="switch ${!p || p.stock !== false ? 'on' : ''}" onclick="this.classList.toggle('on')" id="pStockSwitch"></div></div>
-          <button class="btn btn-primary btn-block" style="margin-top:16px;" onclick="saveProduct('${editId || ''}')">${p ? 'Update' : 'Add Product'}</button>
-          <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="closeModal()">Cancel</button>
-        </div>
-      </div>`;
+    document.getElementById("modalRoot").innerHTML = `<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="sheet"><h3>${p ? 'Edit' : 'Add'} Product</h3><label class="form-label">Name</label><input class="form-input" id="pName" placeholder="Zinger Burger" value="${p ? p.name : ''}" /><label class="form-label">Description</label><input class="form-input" id="pDesc" placeholder="Crispy chicken burger" value="${p ? p.desc : ''}" /><label class="form-label">Price (PKR)</label><input class="form-input" id="pPrice" type="number" placeholder="550" value="${p ? p.price : ''}" /><label class="form-label">Category</label><input class="form-input" id="pCat" placeholder="Burgers" value="${p ? p.category || '' : ''}" /><div class="toggle-row"><span>In Stock</span><div class="switch ${!p || p.stock !== false ? 'on' : ''}" onclick="this.classList.toggle('on')" id="pStockSwitch"></div></div><button class="btn btn-primary btn-block" style="margin-top:16px;" onclick="saveProduct('${editId || ''}')">${p ? 'Update' : 'Add'}</button><button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="closeModal()">Cancel</button></div></div>`;
   }
 
   async function saveProduct(editId) {
-    const name = document.getElementById('pName').value.trim();
-    const desc = document.getElementById('pDesc').value.trim();
-    const price = parseInt(document.getElementById('pPrice').value);
-    const category = document.getElementById('pCat').value.trim() || "General";
-    const stock = document.getElementById('pStockSwitch').classList.contains('on');
+    const name = document.getElementById('pName').value.trim(); const desc = document.getElementById('pDesc').value.trim(); const price = parseInt(document.getElementById('pPrice').value); const category = document.getElementById('pCat').value.trim() || "General"; const stock = document.getElementById('pStockSwitch').classList.contains('on');
     if (!name || !price) return toast("Name and price required");
-    if (editId) {
-      const idx = state.products.findIndex(x => String(x.id) === String(editId));
-      if (idx >= 0) state.products[idx] = { ...state.products[idx], name, desc, price, category, stock };
-    } else {
-      state.products.push({ id: Date.now(), name, desc, price, category, stock });
-    }
-    await saveProducts(); closeModal(); render(); toast(editId ? "Product updated ✅" : "Product added ✅");
+    if (editId) { const idx = state.products.findIndex(x => String(x.id) === String(editId)); if (idx >= 0) state.products[idx] = { ...state.products[idx], name, desc, price, category, stock }; }
+    else { state.products.push({ id: Date.now(), name, desc, price, category, stock }); }
+    await saveProducts(); closeModal(); render(); toast(editId ? "Updated ✅" : "Added ✅");
   }
 
-  async function deleteProduct(id) {
-    if (!confirm("Delete this product?")) return;
-    state.products = state.products.filter(x => String(x.id) !== String(id));
-    await saveProducts(); render(); toast("Product deleted");
-  }
+  async function deleteProduct(id) { if (!confirm("Delete this product?")) return; state.products = state.products.filter(x => String(x.id) !== String(id)); await saveProducts(); render(); toast("Deleted"); }
 
   function renderHome() {
     if (!state.merchant) return renderLoginPrompt();
     const today = new Date().toDateString();
-    const todayOrders = state.orders.filter(o => new Date(o.createdAt).toDateString() === today && o.status !== "Cancelled" && o.status !== "Rejected");
-    const todaySales = todayOrders.reduce((sum, o) => {
-      const myItems = (o.items || []).filter(i => i.shopName && i.shopName.toLowerCase() === state.merchant.storeName.toLowerCase());
-      return sum + myItems.reduce((s, i) => s + i.price * i.qty, 0);
-    }, 0);
-    const todayCommission = Math.round(todaySales * COMMISSION_RATE);
+    const todayOrders = state.orders.filter(o => new Date(o.createdAt).toDateString() === today && !["Cancelled", "Rejected"].includes(o.status));
+    const todaySales = todayOrders.reduce((sum, o) => { const myItems = (o.items || []).filter(i => i.shopName && i.shopName.toLowerCase() === state.merchant.storeName.toLowerCase()); return sum + myItems.reduce((s, i) => s + i.price * i.qty, 0); }, 0);
+    const todayCommission = Math.round(todaySales * (state.commissionRate / 100));
     const todayNet = todaySales - todayCommission;
     const pendingCount = state.orders.filter(o => o.status === "Placed").length;
-    return `<h2>Welcome back, ${state.merchant.storeName}</h2>
-      ${pendingCount > 0 ? `<div class="card order-card new" onclick="state.tab='orders';render();" style="cursor:pointer;"><div style="display:flex;justify-content:space-between;align-items:center;"><div><h3 style="color:var(--danger);">🔔 ${pendingCount} New Order${pendingCount > 1 ? 's' : ''}!</h3><p style="margin-top:4px;">Tap to view and accept</p></div><div style="font-size:24px;">→</div></div></div>` : ''}
+    return `<h2>Welcome, ${state.merchant.storeName}</h2>
+      ${pendingCount > 0 ? `<div class="card order-card new" onclick="state.tab='orders';render();" style="cursor:pointer;"><div style="display:flex;justify-content:space-between;align-items:center;"><div><h3 style="color:var(--danger);">🔔 ${pendingCount} New Order${pendingCount > 1 ? 's' : ''}!</h3><p style="margin-top:4px;">Tap to accept</p></div><div style="font-size:24px;">→</div></div></div>` : ''}
       <div class="stat-grid">
-        <div class="stat-box accent"><div class="num">Rs ${todayNet}</div><div class="lbl">Today's Earnings (After Commission)</div></div>
+        <div class="stat-box accent"><div class="num">Rs ${todayNet}</div><div class="lbl">Today (After Commission)</div></div>
         <div class="stat-box"><div class="num">${todayOrders.length}</div><div class="lbl">Today's Orders</div></div>
         <div class="stat-box"><div class="num">Rs ${todaySales}</div><div class="lbl">Gross Sales</div></div>
-        <div class="stat-box"><div class="num">${state.products.length}</div><div class="lbl">Products Listed</div></div>
-        <div class="stat-box"><div class="num">Rs ${todayCommission}</div><div class="lbl">SYEDGO Commission (10%)</div></div>
+        <div class="stat-box"><div class="num">${state.products.length}</div><div class="lbl">Products</div></div>
+        <div class="stat-box"><div class="num">Rs ${todayCommission}</div><div class="lbl">SYEDGO Fee (${state.commissionRate}%)</div></div>
       </div>
       <h2 style="margin-top:20px;">Quick Actions</h2>
-      <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <button class="btn btn-outline" style="flex:1;" onclick="state.tab='products';addProductModal();">➕ Add Product</button>
-        <button class="btn btn-outline" style="flex:1;" onclick="state.tab='orders';render();">📦 View Orders</button>
-      </div>
-      <h2 style="margin-top:20px;">Store Status</h2>
-      <div class="card"><div class="toggle-row"><div><b>${state.isOpen ? '🟢 Open' : '🔴 Closed'}</b><p style="font-size:12px;margin-top:2px;">${state.isOpen ? 'Accepting orders' : 'Not accepting orders'}</p></div><div class="switch ${state.isOpen ? 'on' : ''}" onclick="toggleOpen();render();"></div></div></div>`;
+      <div style="display:flex;gap:8px;margin-bottom:12px;"><button class="btn btn-outline" style="flex:1;" onclick="state.tab='products';addProductModal();">➕ Add Product</button><button class="btn btn-outline" style="flex:1;" onclick="state.tab='orders';render();">📦 View Orders</button></div>
+      <div class="card"><div class="toggle-row"><div><b>${state.isOpen ? '🟢 Open' : '🔴 Closed'}</b><p style="font-size:12px;margin-top:2px;">${state.isOpen ? 'Accepting orders' : 'Not accepting'}</p></div><div class="switch ${state.isOpen ? 'on' : ''}" onclick="toggleOpen();render();"></div></div></div>`;
   }
 
   function renderOrders() {
     if (!state.merchant) return renderLoginPrompt();
-    if (state.orders.length === 0) return '<div class="empty"><span class="big">📭</span>No orders yet<br><span style="font-size:12px;">New orders will appear here</span></div>';
+    if (state.orders.length === 0) return '<div class="empty"><span class="big">📭</span>No orders yet</div>';
     return `<h2>Orders (${state.orders.length})</h2>${state.orders.map(o => {
       const myItems = (o.items || []).filter(i => i.shopName && i.shopName.toLowerCase() === state.merchant.storeName.toLowerCase());
       const mySubtotal = myItems.reduce((s, i) => s + i.price * i.qty, 0);
-      const myCommission = Math.round(mySubtotal * COMMISSION_RATE);
+      const myCommission = Math.round(mySubtotal * (state.commissionRate / 100));
       const myNet = mySubtotal - myCommission;
       const isPending = o.status === "Placed";
       const isAccepted = o.status === "Accepted by Store";
@@ -304,31 +231,17 @@ p { font-size: 13px; color: var(--text-light); }
       return `<div class="card order-card ${isPending ? 'new' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><b>#${o.id}</b><span class="status-chip ${cls}">${o.status}</span></div>
         <p style="font-size:12px;color:var(--text-light);margin-bottom:8px;">${new Date(o.createdAt).toLocaleString()}</p>
-        <div style="background:#f8fafc;border-radius:10px;padding:10px;margin-bottom:10px;">
-          <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Your Items:</div>
-          ${myItems.map(i => `<div style="font-size:13px;display:flex;justify-content:space-between;padding:3px 0;"><span>${i.name} × ${i.qty}</span><span>Rs ${i.price * i.qty}</span></div>`).join("")}
-          <div style="border-top:1px dashed #cbd5e1;margin-top:6px;padding-top:6px;font-size:13px;">
-            <div style="display:flex;justify-content:space-between;color:var(--text-light);"><span>Subtotal</span><span>Rs ${mySubtotal}</span></div>
-            <div style="display:flex;justify-content:space-between;color:var(--danger);"><span>SYEDGO Fee (10%)</span><span>-Rs ${myCommission}</span></div>
-            <div style="display:flex;justify-content:space-between;font-weight:700;color:var(--success);"><span>You Earn</span><span>Rs ${myNet}</span></div>
-          </div>
-        </div>
-        <div class="order-row"><span>Customer</span><span>${o.userName || 'Customer'}</span></div>
+        <div style="background:#f8fafc;border-radius:10px;padding:10px;margin-bottom:10px;"><div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">Your Items:</div>${myItems.map(i => `<div style="font-size:13px;display:flex;justify-content:space-between;padding:3px 0;"><span>${i.name} × ${i.qty}</span><span>Rs ${i.price * i.qty}</span></div>`).join("")}<div style="border-top:1px dashed #cbd5e1;margin-top:6px;padding-top:6px;font-size:13px;"><div style="display:flex;justify-content:space-between;color:var(--text-light);"><span>Subtotal</span><span>Rs ${mySubtotal}</span></div><div style="display:flex;justify-content:space-between;color:var(--danger);"><span>SYEDGO Fee (${state.commissionRate}%)</span><span>-Rs ${myCommission}</span></div><div style="display:flex;justify-content:space-between;font-weight:700;color:var(--success);"><span>You Earn</span><span>Rs ${myNet}</span></div></div></div>
+        <div class="order-row"><span>Customer</span><span>${o.userName || '-'}</span></div>
         <div class="order-row"><span>Phone</span><span>${o.userPhone || '-'}</span></div>
         <div class="order-row"><span>Address</span><span style="font-size:12px;text-align:right;max-width:60%;">${o.address?.details || '-'}</span></div>
         ${o.address?.instructions ? `<div class="order-row"><span>Note</span><span style="font-size:12px;color:var(--accent);">📝 ${o.address.instructions}</span></div>` : ''}
         <div class="order-row"><span>Payment</span><span>${(o.pay || 'cod').toUpperCase()} • ${o.mode === 'delivery' ? 'Delivery' : 'Pickup'}</span></div>
-        ${o.rider ? `<div style="margin-top:10px;padding:10px;background:#f0fdf4;border-radius:10px;border-left:3px solid var(--success);">
-          <div style="font-size:11px;color:var(--success);font-weight:700;margin-bottom:4px;">🛵 RIDER ACCEPTED</div>
-          <div class="order-row" style="padding:2px 0;"><span>Name</span><span>${o.rider.name || '-'}</span></div>
-          <div class="order-row" style="padding:2px 0;"><span>Phone</span><span>${o.rider.phone || '-'}</span></div>
-          <div class="order-row" style="padding:2px 0;"><span>Bike</span><span>${o.rider.bike || '-'}</span></div>
-          <div class="order-row" style="padding:2px 0;"><span>Rating</span><span>⭐ ${o.rider.rating || '5.0'}</span></div>
-        </div>` : ''}
+        ${o.rider ? `<div style="margin-top:10px;padding:10px;background:#f0fdf4;border-radius:10px;border-left:3px solid var(--success);"><div style="font-size:11px;color:var(--success);font-weight:700;margin-bottom:4px;">🛵 RIDER ACCEPTED</div><div class="order-row" style="padding:2px 0;"><span>Name</span><span>${o.rider.name || '-'}</span></div><div class="order-row" style="padding:2px 0;"><span>Phone</span><span>${o.rider.phone || '-'}</span></div><div class="order-row" style="padding:2px 0;"><span>Bike</span><span>${o.rider.bike || '-'}</span></div><div class="order-row" style="padding:2px 0;"><span>Rating</span><span>⭐ ${o.rider.rating || '5.0'}</span></div></div>` : ''}
         <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
           ${isPending ? `<button class="btn btn-success btn-sm" style="flex:1;" onclick="acceptOrder('${o.id}')">✅ Accept</button><button class="btn btn-danger btn-sm" style="flex:1;" onclick="rejectOrder('${o.id}')">❌ Reject</button>` : ''}
           ${isAccepted ? `<button class="btn btn-warning btn-sm" style="flex:1;" onclick="markReady('${o.id}')">🛍️ Mark Ready for Pickup</button>` : ''}
-          ${isReady ? `<div style="flex:1;text-align:center;padding:10px;background:#fef3c7;border-radius:8px;font-size:12px;color:#92400e;font-weight:600;animation:pulse 1.5s infinite;">⏳ Waiting for rider to accept...</div>` : ''}
+          ${isReady ? `<div style="flex:1;text-align:center;padding:10px;background:#fef3c7;border-radius:8px;font-size:12px;color:#92400e;font-weight:600;animation:pulse 1.5s infinite;">⏳ Waiting for rider...</div>` : ''}
           ${hasRider ? `<div style="flex:1;text-align:center;padding:10px;background:#dbeafe;border-radius:8px;font-size:12px;color:#1e40af;font-weight:600;">🛵 ${o.status}</div>` : ''}
           ${isDone ? `<div style="flex:1;text-align:center;padding:10px;background:#dcfce7;border-radius:8px;font-size:12px;color:#166534;font-weight:600;">✅ Completed</div>` : ''}
           ${isCancelled ? `<div style="flex:1;text-align:center;padding:10px;background:#f3f4f6;border-radius:8px;font-size:12px;color:#6b7280;font-weight:600;">${o.status}</div>` : ''}
@@ -339,9 +252,8 @@ p { font-size: 13px; color: var(--text-light); }
 
   function renderProducts() {
     if (!state.merchant) return renderLoginPrompt();
-    if (state.products.length === 0) return `<h2>Your Products</h2><div class="empty"><span class="big">🍔</span>No products yet<br><span style="font-size:12px;">Add your first product to start selling</span></div><button class="btn btn-primary btn-block" onclick="addProductModal()">➕ Add First Product</button>`;
-    const grouped = {};
-    state.products.forEach(p => { const cat = p.category || "General"; if (!grouped[cat]) grouped[cat] = []; grouped[cat].push(p); });
+    if (state.products.length === 0) return `<h2>Products</h2><div class="empty"><span class="big">🍔</span>No products yet</div><button class="btn btn-primary btn-block" onclick="addProductModal()">➕ Add First Product</button>`;
+    const grouped = {}; state.products.forEach(p => { const cat = p.category || "General"; if (!grouped[cat]) grouped[cat] = []; grouped[cat].push(p); });
     return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><h2 style="margin:0;">Products (${state.products.length})</h2><button class="btn btn-primary btn-sm" onclick="addProductModal()">➕ Add</button></div>${Object.keys(grouped).map(cat => `<div class="card"><h3 style="font-size:14px;color:var(--accent);margin-bottom:8px;">${cat}</h3>${grouped[cat].map(p => `<div class="product-item"><div class="prod-info"><h4>${p.name} ${p.stock === false ? '<span style="color:var(--danger);font-size:10px;">(Out of Stock)</span>' : ''}</h4><p>${p.desc || '-'}</p><div class="prod-price">Rs ${p.price}</div></div><div class="prod-actions"><button class="btn btn-outline btn-sm" onclick="addProductModal('${p.id}')">✏️</button><button class="btn btn-outline btn-sm" style="color:var(--danger);" onclick="deleteProduct('${p.id}')">🗑️</button></div></div>`).join("")}</div>`).join("")}`;
   }
 
@@ -350,130 +262,81 @@ p { font-size: 13px; color: var(--text-light); }
     const today = new Date().toDateString();
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const calc = (orders) => {
-      let gross = 0, commission = 0, net = 0, count = 0;
-      orders.forEach(o => {
-        if (["Cancelled", "Rejected"].includes(o.status)) return;
-        const items = (o.items || []).filter(i => i.shopName && i.shopName.toLowerCase() === state.merchant.storeName.toLowerCase());
-        const sub = items.reduce((s, i) => s + i.price * i.qty, 0);
-        if (sub > 0) { gross += sub; commission += Math.round(sub * COMMISSION_RATE); net += sub - Math.round(sub * COMMISSION_RATE); count++; }
-      });
-      return { gross, commission, net, count };
-    };
+    const calc = (orders) => { let gross = 0, commission = 0, net = 0, count = 0; orders.forEach(o => { if (["Cancelled", "Rejected"].includes(o.status)) return; const items = (o.items || []).filter(i => i.shopName && i.shopName.toLowerCase() === state.merchant.storeName.toLowerCase()); const sub = items.reduce((s, i) => s + i.price * i.qty, 0); if (sub > 0) { gross += sub; commission += Math.round(sub * (state.commissionRate / 100)); net += sub - Math.round(sub * (state.commissionRate / 100)); count++; } }); return { gross, commission, net, count }; };
     const todayStats = calc(state.orders.filter(o => new Date(o.createdAt).toDateString() === today));
     const weekStats = calc(state.orders.filter(o => new Date(o.createdAt) > weekAgo));
     const monthStats = calc(state.orders.filter(o => new Date(o.createdAt) > monthAgo));
     const allStats = calc(state.orders);
+    const paidPayouts = state.payouts.filter(p => p.status === "paid").reduce((s, p) => s + (p.amount || 0), 0);
+    const pendingPayouts = state.payouts.filter(p => p.status === "pending").reduce((s, p) => s + (p.amount || 0), 0);
+    const availableBalance = Math.max(0, allStats.net - paidPayouts - pendingPayouts);
     return `<h2>Earnings</h2>
-      <div class="stat-grid"><div class="stat-box accent"><div class="num">Rs ${todayStats.net}</div><div class="lbl">Today (After 10% Commission)</div></div></div>
-      <div class="card"><h3 style="margin-bottom:10px;font-size:14px;">📊 Sales Summary</h3><div class="order-row"><span>Today</span><span>Rs ${todayStats.net} (${todayStats.count} orders)</span></div><div class="order-row"><span>This Week</span><span>Rs ${weekStats.net} (${weekStats.count} orders)</span></div><div class="order-row"><span>This Month</span><span>Rs ${monthStats.net} (${monthStats.count} orders)</span></div><div class="order-row" style="border-top:1px solid var(--border);padding-top:10px;margin-top:10px;"><span><b>Lifetime</b></span><span><b>Rs ${allStats.net}</b></span></div></div>
-      <div class="card"><h3 style="margin-bottom:10px;font-size:14px;">💼 Commission Breakdown</h3><div class="order-row"><span>Total Gross Sales</span><span>Rs ${allStats.gross}</span></div><div class="order-row" style="color:var(--danger);"><span>SYEDGO Commission (10%)</span><span>-Rs ${allStats.commission}</span></div><div class="order-row" style="border-top:1px solid var(--border);padding-top:10px;margin-top:10px;color:var(--success);font-weight:700;"><span>Net Earnings</span><span>Rs ${allStats.net}</span></div></div>
-      <div class="card"><h3 style="margin-bottom:10px;font-size:14px;">💸 Payouts</h3>${state.payouts.length === 0 ? `<p style="font-size:13px;color:var(--text-light);">No payout requests yet.</p>` : state.payouts.slice(0, 5).map(p => `<div class="payout-item"><div><b>Rs ${p.amount}</b><br><span style="font-size:11px;color:var(--text-light);">${new Date(p.requestedAt).toLocaleDateString()}</span></div><div><span class="status-chip ${p.status === 'pending' ? 'pending' : 'delivered'}">${p.status}</span></div></div>`).join("")}</div>
+      <div class="stat-grid"><div class="stat-box accent"><div class="num">Rs ${availableBalance}</div><div class="lbl">Available Balance</div></div><div class="stat-box"><div class="num">Rs ${todayStats.net}</div><div class="lbl">Today</div></div></div>
+      <div class="card"><h3 style="margin-bottom:10px;font-size:14px;">📊 Sales Summary</h3><div class="order-row"><span>Today</span><span>Rs ${todayStats.net} (${todayStats.count})</span></div><div class="order-row"><span>This Week</span><span>Rs ${weekStats.net} (${weekStats.count})</span></div><div class="order-row"><span>This Month</span><span>Rs ${monthStats.net} (${monthStats.count})</span></div><div class="order-row" style="border-top:1px solid var(--border);padding-top:10px;margin-top:10px;"><span><b>Lifetime</b></span><span><b>Rs ${allStats.net}</b></span></div></div>
+      <div class="card"><h3 style="margin-bottom:10px;font-size:14px;">💼 Commission Breakdown</h3><div class="order-row"><span>Gross Sales</span><span>Rs ${allStats.gross}</span></div><div class="order-row" style="color:var(--danger);"><span>SYEDGO Fee (${state.commissionRate}%)</span><span>-Rs ${allStats.commission}</span></div><div class="order-row" style="border-top:1px solid var(--border);padding-top:10px;margin-top:10px;color:var(--success);font-weight:700;"><span>Net Earnings</span><span>Rs ${allStats.net}</span></div></div>
+      <div class="card"><h3 style="margin-bottom:10px;font-size:14px;">💸 Payout History</h3><div class="order-row"><span>Total Paid Out</span><span>Rs ${paidPayouts}</span></div><div class="order-row"><span>Pending</span><span>Rs ${pendingPayouts}</span></div>${state.payouts.length === 0 ? `<p style="font-size:12px;color:var(--text-light);margin-top:8px;">No payout requests yet.</p>` : state.payouts.slice(0, 5).map(p => `<div class="payout-item"><div><b>Rs ${p.amount}</b><br><span style="font-size:11px;color:var(--text-light);">${new Date(p.requestedAt).toLocaleDateString()}</span></div><div><span class="status-chip ${p.status === 'pending' ? 'pending' : 'delivered'}">${p.status}</span></div></div>`).join("")}</div>
       <button class="btn btn-primary btn-block" onclick="requestPayout()">💸 Request Payout</button>`;
   }
 
-  function requestPayout() {
+  async function requestPayout() {
     if (!state.merchant) return toast("Login first");
-    const total = state.orders.filter(o => o.status === "Delivered").reduce((sum, o) => {
-      const items = (o.items || []).filter(i => i.shopName && i.shopName.toLowerCase() === state.merchant.storeName.toLowerCase());
-      const sub = items.reduce((s, i) => s + i.price * i.qty, 0);
-      return sum + (sub - Math.round(sub * COMMISSION_RATE));
-    }, 0);
-    const alreadyRequested = state.payouts.filter(p => p.status === 'pending').reduce((s, p) => s + p.amount, 0);
-    const available = total - alreadyRequested - state.payouts.reduce((s, p) => s + p.amount, 0);
-    if (available < 500) return toast("Minimum payout Rs 500. Available: Rs " + Math.max(0, Math.round(available)));
+    const total = state.orders.filter(o => o.status === "Delivered").reduce((sum, o) => { const items = (o.items || []).filter(i => i.shopName && i.shopName.toLowerCase() === state.merchant.storeName.toLowerCase()); const sub = items.reduce((s, i) => s + i.price * i.qty, 0); return sum + (sub - Math.round(sub * (state.commissionRate / 100))); }, 0);
+    const pending = state.payouts.filter(p => p.status === "pending").reduce((s, p) => s + (p.amount || 0), 0);
+    const paid = state.payouts.filter(p => p.status === "paid").reduce((s, p) => s + (p.amount || 0), 0);
+    const available = total - pending - paid;
+    if (available < 500) return toast("Min Rs 500. Available: Rs " + Math.max(0, Math.round(available)));
     const amount = prompt(`Available: Rs ${Math.round(available)}\n\nEnter amount (min Rs 500):`, Math.round(available));
     if (!amount) return;
     const amt = parseInt(amount);
     if (amt < 500 || amt > available) return toast("Invalid amount");
-    state.payouts.unshift({ amount: amt, requestedAt: new Date().toISOString(), status: "pending" });
-    saveLocal(); render(); toast("Payout requested ✅");
+    try {
+      const payoutId = "PO" + Date.now().toString().slice(-8);
+      await setDoc(doc(db, "payouts", payoutId), { id: payoutId, type: "merchant", merchantName: state.merchant.storeName, merchantPhone: state.merchant.phone, amount: amt, status: "pending", requestedAt: new Date().toISOString() });
+      toast("Payout requested ✅");
+    } catch (e) { console.error(e); toast("Failed"); }
   }
 
   function renderProfile() {
     if (!state.merchant) return renderLoginPrompt();
     const cat = CATEGORIES.find(c => c.key === state.merchant.category) || CATEGORIES[5];
     return `<div class="card"><div style="display:flex;align-items:center;gap:16px;"><div style="width:60px;height:60px;border-radius:14px;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;">${cat.emoji}</div><div><h3>${state.merchant.storeName}</h3><p style="font-size:13px;color:var(--text-light);">${state.merchant.phone}</p><p style="font-size:12px;color:var(--accent);margin-top:2px;">${cat.label}</p></div></div></div>
-    <div class="card">
-      <div class="order-row" style="cursor:pointer;padding:14px 0;border-bottom:1px solid var(--border);" onclick="editStore()"><span>🏪 Store Name</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.storeName} ›</span></div>
-      <div class="order-row" style="padding:14px 0;border-bottom:1px solid var(--border);"><span>📍 Address</span><span style="color:var(--text-light);font-size:12px;text-align:right;max-width:60%;">${state.merchant.address || 'Not set'}</span></div>
-      <div class="order-row" style="cursor:pointer;padding:14px 0;border-bottom:1px solid var(--border);" onclick="editHours()"><span>🕒 Opening Hours</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.hours || 'Not set'} ›</span></div>
-      <div class="order-row" style="cursor:pointer;padding:14px 0;border-bottom:1px solid var(--border);" onclick="editDeliveryArea()"><span>🗺️ Delivery Area</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.deliveryArea || 'Not set'} ›</span></div>
-    </div>
-    <div class="card">
-      <div class="toggle-row"><span>💰 Commission Rate</span><span style="font-weight:700;color:var(--accent);">10%</span></div>
-      <div class="toggle-row"><span>📞 Support</span><span style="font-size:12px;color:var(--text-light);">support@syedgo.com</span></div>
-    </div>
+    <div class="card"><div class="order-row" style="cursor:pointer;padding:14px 0;border-bottom:1px solid var(--border);" onclick="editStore()"><span>🏪 Store Name</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.storeName} ›</span></div><div class="order-row" style="padding:14px 0;border-bottom:1px solid var(--border);"><span>📍 Address</span><span style="color:var(--text-light);font-size:12px;text-align:right;max-width:60%;">${state.merchant.address || 'Not set'}</span></div><div class="order-row" style="cursor:pointer;padding:14px 0;border-bottom:1px solid var(--border);" onclick="editHours()"><span>🕒 Hours</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.hours || 'Not set'} ›</span></div><div class="order-row" style="cursor:pointer;padding:14px 0;" onclick="editDeliveryArea()"><span>🗺️ Delivery Area</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.deliveryArea || 'Not set'} ›</span></div></div>
+    <div class="card"><div class="toggle-row"><span>💰 Commission Rate</span><span style="font-weight:700;color:var(--accent);">${state.commissionRate}%</span></div><div class="toggle-row"><span>📞 Support</span><span style="font-size:12px;color:var(--text-light);">support@syedgo.com</span></div></div>
     <button class="btn btn-danger btn-block" onclick="logout()">Logout</button>`;
   }
 
-  function editStore() { const name = prompt("Store Name:", state.merchant.storeName); if (!name || !name.trim()) return; state.merchant.storeName = name.trim(); saveLocal(); saveMerchantToFirebase(); render(); toast("Store updated"); }
-  function editHours() { const hours = prompt("Opening Hours:", state.merchant.hours || "8:00 AM - 10:00 PM"); if (!hours) return; state.merchant.hours = hours; saveLocal(); saveMerchantToFirebase(); render(); toast("Hours updated"); }
-  function editDeliveryArea() { const area = prompt("Delivery Area:", state.merchant.deliveryArea || ""); if (!area) return; state.merchant.deliveryArea = area; saveLocal(); saveMerchantToFirebase(); render(); toast("Area updated"); }
+  function editStore() { const name = prompt("Store Name:", state.merchant.storeName); if (!name || !name.trim()) return; state.merchant.storeName = name.trim(); saveLocal(); saveMerchantToFirebase(); render(); toast("Updated"); }
+  function editHours() { const hours = prompt("Hours:", state.merchant.hours || ""); if (!hours) return; state.merchant.hours = hours; saveLocal(); saveMerchantToFirebase(); render(); toast("Updated"); }
+  function editDeliveryArea() { const area = prompt("Delivery Area:", state.merchant.deliveryArea || ""); if (!area) return; state.merchant.deliveryArea = area; saveLocal(); saveMerchantToFirebase(); render(); toast("Updated"); }
 
-  function renderLoginPrompt() {
-    return `<div class="card" style="text-align:center;padding:40px 20px;"><div style="font-size:64px;margin-bottom:16px;">🏪</div><h3 style="margin-bottom:8px;">Welcome to SYEDGO Merchant</h3><p style="color:var(--text-light);font-size:13px;margin-bottom:20px;">Register your business and start receiving orders</p><button class="btn btn-primary btn-block" onclick="openAuth()">Login / Register</button></div>`;
-  }
+  function renderLoginPrompt() { return `<div class="card" style="text-align:center;padding:40px 20px;"><div style="font-size:64px;margin-bottom:16px;">🏪</div><h3 style="margin-bottom:8px;">Welcome to SYEDGO Merchant</h3><p style="color:var(--text-light);font-size:13px;margin-bottom:20px;">Register your business</p><button class="btn btn-primary btn-block" onclick="openAuth()">Login / Register</button></div>`; }
 
-  function openAuth() {
-    document.getElementById("modalRoot").innerHTML = `<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="sheet"><h3>Merchant Login</h3><div id="mStep1"><p style="font-size:13px;color:var(--text-light);margin-bottom:12px;">Enter your phone number to continue.</p><input class="form-input" id="mPhone" placeholder="+92 300 1234567" type="tel" /><button class="btn btn-primary btn-block" onclick="checkMerchant()">Continue</button></div><div id="mStep2" class="hidden"><p style="text-align:center;margin-bottom:16px;">🏪 Register your business</p><label class="form-label">Store Name</label><input class="form-input" id="mStoreName" placeholder="e.g. Al-Madina Superstore" /><label class="form-label">Category</label><select class="form-input" id="mCategory">${CATEGORIES.map(c => `<option value="${c.key}">${c.emoji} ${c.label}</option>`).join("")}</select><label class="form-label">Store Address</label><input class="form-input" id="mAddress" placeholder="e.g. Mingora Bazaar, Swat" /><label class="form-label">Opening Hours</label><input class="form-input" id="mHours" value="8:00 AM - 11:00 PM" /><label class="form-label">Delivery Area (optional)</label><input class="form-input" id="mArea" placeholder="e.g. Mingora, Saidu Sharif" /><button class="btn btn-success btn-block" onclick="registerMerchant()">Register Business</button><button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="backToStep1()">← Change Number</button></div><button class="btn btn-outline btn-block" style="margin-top:10px;" onclick="closeModal()">Cancel</button></div></div>`;
-    setTimeout(() => document.getElementById('mPhone')?.focus(), 100);
-  }
+  function openAuth() { document.getElementById("modalRoot").innerHTML = `<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="sheet"><h3>Merchant Login</h3><div id="mStep1"><input class="form-input" id="mPhone" placeholder="+92 300 1234567" type="tel" /><button class="btn btn-primary btn-block" onclick="checkMerchant()">Continue</button></div><div id="mStep2" class="hidden"><p style="text-align:center;margin-bottom:16px;">🏪 Register</p><label class="form-label">Store Name</label><input class="form-input" id="mStoreName" placeholder="Al-Madina Superstore" /><label class="form-label">Category</label><select class="form-input" id="mCategory">${CATEGORIES.map(c => `<option value="${c.key}">${c.emoji} ${c.label}</option>`).join("")}</select><label class="form-label">Address</label><input class="form-input" id="mAddress" placeholder="Mingora, Swat" /><label class="form-label">Hours</label><input class="form-input" id="mHours" value="8:00 AM - 11:00 PM" /><label class="form-label">Delivery Area (optional)</label><input class="form-input" id="mArea" placeholder="Mingora, Saidu" /><button class="btn btn-success btn-block" onclick="registerMerchant()">Register</button><button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="backToStep1()">← Change</button></div><button class="btn btn-outline btn-block" style="margin-top:10px;" onclick="closeModal()">Cancel</button></div></div>`; setTimeout(() => document.getElementById('mPhone')?.focus(), 100); }
 
   async function checkMerchant() {
-    const input = document.getElementById('mPhone').value.trim(); if (!input) return toast("Enter phone number");
+    const input = document.getElementById('mPhone').value.trim(); if (!input) return toast("Enter phone");
     let phone = input.replace(/[\s\-()]/g, "");
-    if (phone.startsWith("0")) phone = "+92" + phone.slice(1);
-    else if (phone.startsWith("92") && !phone.startsWith("+")) phone = "+" + phone;
-    else if (!phone.startsWith("+")) phone = "+92" + phone;
-    window._mPhone = phone;
-    toast("Checking...");
+    if (phone.startsWith("0")) phone = "+92" + phone.slice(1); else if (phone.startsWith("92") && !phone.startsWith("+")) phone = "+" + phone; else if (!phone.startsWith("+")) phone = "+92" + phone;
+    window._mPhone = phone; toast("Checking...");
     try {
       const snap = await getDoc(doc(db, "merchants", phone));
-      if (snap.exists()) {
-        const data = snap.data();
-        state.merchant = data.merchant || data;
-        state.products = data.products || [];
-        saveLocal(); closeModal(); loadOrders(); updateOpenStatus();
-        document.getElementById('storeNameTop').textContent = state.merchant.storeName || "SYEDGO Merchant";
-        render(); toast("Welcome back, " + state.merchant.storeName + "! 🎉");
-      } else {
-        document.getElementById('mStep1').classList.add('hidden');
-        document.getElementById('mStep2').classList.remove('hidden');
-      }
-    } catch (e) { console.error(e); toast(e.code === "permission-denied" ? "Permission denied. Check Firestore rules." : "Network error"); }
+      if (snap.exists()) { const data = snap.data(); state.merchant = data.merchant || data; state.products = data.products || []; saveLocal(); closeModal(); loadOrders(); loadPayouts(); loadSettings(); updateOpenStatus(); document.getElementById('storeNameTop').textContent = state.merchant.storeName; render(); toast("Welcome back! 🎉"); }
+      else { document.getElementById('mStep1').classList.add('hidden'); document.getElementById('mStep2').classList.remove('hidden'); }
+    } catch (e) { console.error(e); toast("Network error"); }
   }
 
   function backToStep1() { document.getElementById('mStep2').classList.add('hidden'); document.getElementById('mStep1').classList.remove('hidden'); }
 
   async function registerMerchant() {
-    const storeName = document.getElementById('mStoreName').value.trim();
-    const category = document.getElementById('mCategory').value;
-    const address = document.getElementById('mAddress').value.trim();
-    const hours = document.getElementById('mHours').value.trim();
-    const deliveryArea = document.getElementById('mArea').value.trim();
-    if (!storeName || !address) return toast("Store name and address required");
+    const storeName = document.getElementById('mStoreName').value.trim(); const category = document.getElementById('mCategory').value; const address = document.getElementById('mAddress').value.trim(); const hours = document.getElementById('mHours').value.trim(); const deliveryArea = document.getElementById('mArea').value.trim();
+    if (!storeName || !address) return toast("Name and address required");
     state.merchant = { storeName, phone: window._mPhone, category, address, hours, deliveryArea, createdAt: new Date().toISOString() };
-    state.products = []; saveLocal();
-    await saveMerchantToFirebase(); closeModal(); loadOrders(); updateOpenStatus();
-    document.getElementById('storeNameTop').textContent = state.merchant.storeName;
-    render(); toast("Business registered! 🎉");
+    state.products = []; saveLocal(); await saveMerchantToFirebase(); closeModal(); loadOrders(); loadPayouts(); loadSettings(); updateOpenStatus(); document.getElementById('storeNameTop').textContent = state.merchant.storeName; render(); toast("Registered! 🎉");
   }
 
-  async function saveMerchantToFirebase() {
-    if (!state.merchant) return;
-    try { await setDoc(doc(db, "merchants", state.merchant.phone), { merchant: state.merchant, products: state.products, updatedAt: new Date().toISOString() }, { merge: true }); }
-    catch (e) { console.error(e); }
-  }
+  async function saveMerchantToFirebase() { if (!state.merchant) return; try { await setDoc(doc(db, "merchants", state.merchant.phone), { merchant: state.merchant, products: state.products, updatedAt: new Date().toISOString() }, { merge: true }); } catch (e) { console.error(e); } }
 
-  function logout() {
-    if (!confirm("Logout?")) return;
-    if (state.ordersListener) { state.ordersListener(); state.ordersListener = null; }
-    state.merchant = null; state.orders = []; state.products = []; state.payouts = []; state.isOpen = false;
-    localStorage.clear();
-    document.getElementById('storeNameTop').textContent = "SYEDGO Merchant";
-    updateOpenStatus(); state.tab = "home"; render(); toast("Logged out");
-  }
+  function logout() { if (!confirm("Logout?")) return; if (state.ordersListener) { state.ordersListener(); state.ordersListener = null; } if (state.payoutsListener) { state.payoutsListener(); state.payoutsListener = null; } if (state.settingsListener) { state.settingsListener(); state.settingsListener = null; } state.merchant = null; state.orders = []; state.products = []; state.payouts = []; state.isOpen = false; localStorage.clear(); document.getElementById('storeNameTop').textContent = "SYEDGO Merchant"; updateOpenStatus(); state.tab = "home"; render(); toast("Logged out"); }
 
   function render() {
     const app = document.getElementById("app"); let html = "";
@@ -487,21 +350,14 @@ p { font-size: 13px; color: var(--text-light); }
     updateOrderBadge(); updateOpenStatus();
   }
 
-  document.querySelectorAll(".bottom-nav button").forEach(btn => {
-    btn.addEventListener("click", () => { state.tab = btn.dataset.tab; render(); window.scrollTo(0, 0); });
-  });
+  document.querySelectorAll(".bottom-nav button").forEach(btn => { btn.addEventListener("click", () => { state.tab = btn.dataset.tab; render(); window.scrollTo(0, 0); }); });
 
   setTimeout(() => { document.getElementById('splash').style.opacity = '0'; setTimeout(() => document.getElementById('splash')?.remove(), 500); }, 2000);
   updateOpenStatus();
-  if (state.merchant) { document.getElementById('storeNameTop').textContent = state.merchant.storeName; loadOrders(); }
+  if (state.merchant) { document.getElementById('storeNameTop').textContent = state.merchant.storeName; loadOrders(); loadPayouts(); loadSettings(); }
   render();
 
-  window.toggleOpen = toggleOpen; window.acceptOrder = acceptOrder; window.rejectOrder = rejectOrder;
-  window.markReady = markReady; window.addProductModal = addProductModal; window.saveProduct = saveProduct;
-  window.deleteProduct = deleteProduct; window.requestPayout = requestPayout;
-  window.editStore = editStore; window.editHours = editHours; window.editDeliveryArea = editDeliveryArea;
-  window.openAuth = openAuth; window.checkMerchant = checkMerchant; window.backToStep1 = backToStep1;
-  window.registerMerchant = registerMerchant; window.logout = logout; window.closeModal = closeModal; window.toast = toast;
+  window.toggleOpen = toggleOpen; window.acceptOrder = acceptOrder; window.rejectOrder = rejectOrder; window.markReady = markReady; window.addProductModal = addProductModal; window.saveProduct = saveProduct; window.deleteProduct = deleteProduct; window.requestPayout = requestPayout; window.editStore = editStore; window.editHours = editHours; window.editDeliveryArea = editDeliveryArea; window.openAuth = openAuth; window.checkMerchant = checkMerchant; window.backToStep1 = backToStep1; window.registerMerchant = registerMerchant; window.logout = logout; window.closeModal = closeModal; window.toast = toast;
 </script>
 </body>
 </html>

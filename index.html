@@ -81,6 +81,10 @@ p { font-size: 13px; color: var(--text-light); }
 .switch.on { background: var(--success); }
 .switch::after { content: ''; position: absolute; width: 22px; height: 22px; background: #fff; border-radius: 50%; top: 3px; left: 3px; transition: left 0.3s; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
 .switch.on::after { left: 25px; }
+.error-msg { background: #fee2e2; color: #991b1b; padding: 10px 14px; border-radius: 10px; font-size: 13px; margin-bottom: 12px; text-align: center; font-weight: 500; }
+.info-msg { background: #dbeafe; color: #1e40af; padding: 10px 14px; border-radius: 10px; font-size: 12px; margin-bottom: 12px; text-align: center; }
+.success-msg { background: #dcfce7; color: #166534; padding: 10px 14px; border-radius: 10px; font-size: 13px; margin-bottom: 12px; text-align: center; font-weight: 500; }
+.link-btn { background: none; border: none; color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: underline; padding: 4px; }
 </style>
 </head>
 <body>
@@ -118,13 +122,42 @@ p { font-size: 13px; color: var(--text-light); }
     ordersListener: null, payoutsListener: null, settingsListener: null
   };
 
-  function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(window._t); window._t = setTimeout(() => t.classList.remove("show"), 2500); }
-  function closeModal() { document.getElementById("modalRoot").innerHTML = ""; }
+  // Multi-step login state
+  let loginFlow = {
+    step: 0,
+    phone: "",
+    email: "",
+    merchantData: null,
+    mode: "login" // "login" | "signup" | "reset"
+  };
+
+  function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(window._t); window._t = setTimeout(() => t.classList.remove("show"), 3000); }
+  function closeModal() { document.getElementById("modalRoot").innerHTML = ""; loginFlow = { step: 0, phone: "", email: "", merchantData: null, mode: "login" }; }
   function saveLocal() { if (state.merchant) localStorage.setItem("syedgo_merchant", JSON.stringify(state.merchant)); localStorage.setItem("syedgo_merchant_open", state.isOpen); }
 
+  /* ---------- PASSWORD HASHING (SHA-256 with salt) ---------- */
+  async function hashPassword(password) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(password + "syedgo_merchant_salt_v1");
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  /* ---------- NORMALIZE PHONE ---------- */
+  function normalizePhone(input) {
+    let phone = String(input || "").replace(/[\s\-()]/g, "");
+    if (phone.startsWith("0")) phone = "+92" + phone.slice(1);
+    else if (phone.startsWith("92") && !phone.startsWith("+")) phone = "+" + phone;
+    else if (!phone.startsWith("+")) phone = "+92" + phone;
+    return phone;
+  }
+
+  /* ---------- OPEN STATUS ---------- */
   function updateOpenStatus() { const el = document.getElementById("openToggle"); el.textContent = state.isOpen ? "🟢 Open" : "🔴 Closed"; el.classList.toggle("open", state.isOpen); }
   function toggleOpen() { if (!state.merchant) return toast("Login first"); state.isOpen = !state.isOpen; saveLocal(); updateOpenStatus(); toast(state.isOpen ? "Open" : "Closed"); }
 
+  /* ---------- LISTENERS ---------- */
   function loadSettings() {
     if (state.settingsListener) state.settingsListener();
     state.settingsListener = onSnapshot(doc(db, "settings", "global"), (snap) => {
@@ -170,10 +203,12 @@ p { font-size: 13px; color: var(--text-light); }
 
   function updateOrderBadge() { const pending = state.orders.filter(o => o.status === "Placed").length; const badge = document.getElementById("orderBadge"); if (pending > 0) { badge.textContent = pending; badge.classList.remove("hidden"); } else badge.classList.add("hidden"); }
 
+  /* ---------- ORDER ACTIONS ---------- */
   async function acceptOrder(orderId) { try { await updateDoc(doc(db, "orders", orderId), { status: "Accepted by Store", acceptedAt: new Date().toISOString() }); toast("Accepted ✅"); } catch (e) { toast("Failed"); } }
   async function rejectOrder(orderId) { if (!confirm("Reject this order?")) return; try { await updateDoc(doc(db, "orders", orderId), { status: "Rejected", rejectedAt: new Date().toISOString(), rejectedBy: "Merchant" }); toast("Rejected ❌"); } catch (e) { toast("Failed"); } }
   async function markReady(orderId) { try { await updateDoc(doc(db, "orders", orderId), { status: "Ready for Pickup", readyAt: new Date().toISOString() }); toast("Ready! Riders notified 🛵"); } catch (e) { toast("Failed"); } }
 
+  /* ---------- PRODUCTS ---------- */
   async function saveProducts() { if (!state.merchant) return; try { await setDoc(doc(db, "merchants", state.merchant.phone), { merchant: state.merchant, products: state.products, updatedAt: new Date().toISOString() }, { merge: true }); } catch (e) { console.error(e); } }
 
   function addProductModal(editId = null) {
@@ -191,6 +226,422 @@ p { font-size: 13px; color: var(--text-light); }
 
   async function deleteProduct(id) { if (!confirm("Delete this product?")) return; state.products = state.products.filter(x => String(x.id) !== String(id)); await saveProducts(); render(); toast("Deleted"); }
 
+  /* ============================================================
+     AUTH FLOW — Multi-step login / signup / reset
+     ============================================================ */
+
+  function openAuth() {
+    loginFlow = { step: 1, phone: "", email: "", merchantData: null, mode: "login" };
+    renderAuthModal();
+  }
+
+  function renderAuthModal() {
+    const modalRoot = document.getElementById("modalRoot");
+
+    if (loginFlow.mode === "login") {
+      if (loginFlow.step === 1) {
+        // STEP 1: Phone input
+        modalRoot.innerHTML = `
+          <div class="overlay">
+            <div class="sheet">
+              <h3>🏪 Merchant Login</h3>
+              <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">Enter your registered phone number.</p>
+              <label class="form-label">Phone Number</label>
+              <input class="form-input" id="authPhone" placeholder="+92 300 1234567" type="tel" onkeypress="if(event.key==='Enter')submitPhone()" />
+              <button class="btn btn-primary btn-block" onclick="submitPhone()">Continue</button>
+              <button class="btn btn-outline btn-block" style="margin-top:10px;" onclick="closeModal()">Cancel</button>
+              <p style="font-size:11px;color:var(--text-light);margin-top:12px;text-align:center;">New merchant? Enter your phone and click Continue to sign up.</p>
+            </div>
+          </div>`;
+        setTimeout(() => document.getElementById('authPhone')?.focus(), 100);
+
+      } else if (loginFlow.step === 2) {
+        // STEP 2: Email verification
+        modalRoot.innerHTML = `
+          <div class="overlay">
+            <div class="sheet">
+              <h3>🏪 Merchant Login</h3>
+              <div class="info-msg">📱 ${loginFlow.phone}</div>
+              <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">Enter the email address linked to this account.</p>
+              <label class="form-label">Email Address</label>
+              <input class="form-input" id="authEmail" placeholder="you@example.com" type="email" onkeypress="if(event.key==='Enter')submitEmail()" />
+              <div id="emailError"></div>
+              <button class="btn btn-primary btn-block" onclick="submitEmail()">Continue</button>
+              <button class="btn btn-outline btn-block" style="margin-top:10px;" onclick="backToPhone()">← Back</button>
+            </div>
+          </div>`;
+        setTimeout(() => document.getElementById('authEmail')?.focus(), 100);
+
+      } else if (loginFlow.step === 3) {
+        // STEP 3: Password
+        modalRoot.innerHTML = `
+          <div class="overlay">
+            <div class="sheet">
+              <h3>🏪 Merchant Login</h3>
+              <div class="info-msg">📱 ${loginFlow.phone} • ✉️ ${loginFlow.email}</div>
+              <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">Enter your password to continue.</p>
+              <label class="form-label">Password</label>
+              <input class="form-input" id="authPassword" type="password" placeholder="Your password" onkeypress="if(event.key==='Enter')submitLoginPassword()" />
+              <div id="passError"></div>
+              <button class="btn btn-primary btn-block" onclick="submitLoginPassword()">Login</button>
+              <button class="btn btn-outline btn-block" style="margin-top:10px;" onclick="backToEmail()">← Back</button>
+              <div style="text-align:center;margin-top:12px;">
+                <button class="link-btn" onclick="startPasswordReset()">Forgot Password?</button>
+              </div>
+            </div>
+          </div>`;
+        setTimeout(() => document.getElementById('authPassword')?.focus(), 100);
+      }
+
+    } else if (loginFlow.mode === "signup") {
+      // SIGNUP FORM
+      modalRoot.innerHTML = `
+        <div class="overlay">
+          <div class="sheet">
+            <h3>🏪 Register Your Business</h3>
+            <div class="info-msg">📱 ${loginFlow.phone}</div>
+            <label class="form-label">Store Name *</label>
+            <input class="form-input" id="sStoreName" placeholder="e.g. Al-Madina Superstore" />
+            <label class="form-label">Owner Name *</label>
+            <input class="form-input" id="sOwnerName" placeholder="e.g. Ali Khan" />
+            <label class="form-label">Email *</label>
+            <input class="form-input" id="sEmail" placeholder="you@example.com" type="email" />
+            <label class="form-label">Password *</label>
+            <input class="form-input" id="sPassword" placeholder="Min 6 characters" type="password" />
+            <label class="form-label">Confirm Password *</label>
+            <input class="form-input" id="sConfirm" placeholder="Repeat password" type="password" />
+            <label class="form-label">Category *</label>
+            <select class="form-input" id="sCategory">${CATEGORIES.map(c => `<option value="${c.key}">${c.emoji} ${c.label}</option>`).join("")}</select>
+            <label class="form-label">Store Address *</label>
+            <input class="form-input" id="sAddress" placeholder="e.g. Mingora Bazaar, Swat" />
+            <label class="form-label">Opening Hours</label>
+            <input class="form-input" id="sHours" value="8:00 AM - 11:00 PM" />
+            <label class="form-label">Delivery Area (optional)</label>
+            <input class="form-input" id="sArea" placeholder="e.g. Mingora, Saidu Sharif" />
+            <div id="signupError"></div>
+            <button class="btn btn-success btn-block" onclick="submitSignup()">Register Business</button>
+            <button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="backToPhone()">← Back</button>
+          </div>
+        </div>`;
+
+    } else if (loginFlow.mode === "reset") {
+      if (loginFlow.step === 1) {
+        // RESET STEP 1: Phone
+        modalRoot.innerHTML = `
+          <div class="overlay">
+            <div class="sheet">
+              <h3>🔐 Reset Password</h3>
+              <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">Enter your registered phone number.</p>
+              <label class="form-label">Phone Number</label>
+              <input class="form-input" id="resetPhone" placeholder="+92 300 1234567" type="tel" onkeypress="if(event.key==='Enter')resetSubmitPhone()" />
+              <div id="resetError"></div>
+              <button class="btn btn-primary btn-block" onclick="resetSubmitPhone()">Continue</button>
+              <button class="btn btn-outline btn-block" style="margin-top:10px;" onclick="openAuth()">← Back to Login</button>
+            </div>
+          </div>`;
+        setTimeout(() => document.getElementById('resetPhone')?.focus(), 100);
+
+      } else if (loginFlow.step === 2) {
+        // RESET STEP 2: Email
+        modalRoot.innerHTML = `
+          <div class="overlay">
+            <div class="sheet">
+              <h3>🔐 Reset Password</h3>
+              <div class="info-msg">📱 ${loginFlow.phone}</div>
+              <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">Enter the email linked to this account.</p>
+              <label class="form-label">Email Address</label>
+              <input class="form-input" id="resetEmail" placeholder="you@example.com" type="email" onkeypress="if(event.key==='Enter')resetSubmitEmail()" />
+              <div id="resetError"></div>
+              <button class="btn btn-primary btn-block" onclick="resetSubmitEmail()">Continue</button>
+              <button class="btn btn-outline btn-block" style="margin-top:10px;" onclick="openAuth()">← Back to Login</button>
+            </div>
+          </div>`;
+        setTimeout(() => document.getElementById('resetEmail')?.focus(), 100);
+
+      } else if (loginFlow.step === 3) {
+        // RESET STEP 3: Security questions
+        modalRoot.innerHTML = `
+          <div class="overlay">
+            <div class="sheet">
+              <h3>🔐 Security Questions</h3>
+              <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">Answer <b>at least one</b> question correctly.</p>
+              <label class="form-label">Q1: What is the name of the Restaurant/Shop?</label>
+              <input class="form-input" id="resetQ1" placeholder="Your answer" />
+              <label class="form-label">Q2: What is the name of the Owner?</label>
+              <input class="form-input" id="resetQ2" placeholder="Your answer" />
+              <div id="resetError"></div>
+              <button class="btn btn-primary btn-block" onclick="resetSubmitQuestions()">Verify</button>
+              <button class="btn btn-outline btn-block" style="margin-top:10px;" onclick="openAuth()">← Back to Login</button>
+            </div>
+          </div>`;
+
+      } else if (loginFlow.step === 4) {
+        // RESET STEP 4: New password
+        modalRoot.innerHTML = `
+          <div class="overlay">
+            <div class="sheet">
+              <h3>🔐 Set New Password</h3>
+              <div class="success-msg">✅ Identity verified</div>
+              <label class="form-label">New Password</label>
+              <input class="form-input" id="resetNewPass" type="password" placeholder="Min 6 characters" />
+              <label class="form-label">Confirm New Password</label>
+              <input class="form-input" id="resetNewConfirm" type="password" placeholder="Repeat new password" />
+              <div id="resetError"></div>
+              <button class="btn btn-success btn-block" onclick="resetSaveNewPassword()">Save New Password</button>
+            </div>
+          </div>`;
+      }
+    }
+  }
+
+  /* ---------- AUTH: LOGIN FLOW ---------- */
+  async function submitPhone() {
+    const input = document.getElementById('authPhone').value.trim();
+    if (!input) return toast("Enter phone number");
+    const phone = normalizePhone(input);
+    loginFlow.phone = phone;
+    toast("Checking...");
+
+    try {
+      const snap = await getDoc(doc(db, "merchants", phone));
+      if (snap.exists()) {
+        const data = snap.data();
+        const merchant = data.merchant || data;
+        // Check if this merchant has password set (new auth system) or old (no password)
+        if (!merchant.passwordHash) {
+          // Legacy merchant — no password stored. Prompt them to sign up again? Or allow entry.
+          // For safety, we'll show a message. But to be helpful, we could auto-migrate.
+          document.getElementById("modalRoot").innerHTML = `
+            <div class="overlay">
+              <div class="sheet">
+                <h3>Account Upgrade Required</h3>
+                <div class="error-msg">This account was created before the new login system.<br>Please sign up again with the same phone number to set a password.</div>
+                <button class="btn btn-outline btn-block" onclick="openAuth()">← Back</button>
+              </div>
+            </div>`;
+          return;
+        }
+        loginFlow.merchantData = data;
+        loginFlow.step = 2;
+        renderAuthModal();
+      } else {
+        // New merchant → switch to signup mode
+        loginFlow.mode = "signup";
+        renderAuthModal();
+      }
+    } catch (e) {
+      console.error(e);
+      toast("Network error");
+    }
+  }
+
+  function submitEmail() {
+    const email = document.getElementById('authEmail').value.trim().toLowerCase();
+    const errBox = document.getElementById('emailError');
+    if (!email) { errBox.innerHTML = '<div class="error-msg">Please enter your email.</div>'; return; }
+
+    const storedEmail = (loginFlow.merchantData?.merchant?.email || "").toLowerCase();
+    if (email !== storedEmail) {
+      // Clear password field from DOM if it exists — never render it
+      errBox.innerHTML = '<div class="error-msg">❌ Data doesn\'t match.</div>';
+      return;
+    }
+
+    loginFlow.email = email;
+    loginFlow.step = 3;
+    renderAuthModal();
+  }
+
+  async function submitLoginPassword() {
+    const password = document.getElementById('authPassword').value;
+    const errBox = document.getElementById('passError');
+    if (!password) { errBox.innerHTML = '<div class="error-msg">Please enter your password.</div>'; return; }
+
+    const storedHash = loginFlow.merchantData?.merchant?.passwordHash;
+    const enteredHash = await hashPassword(password);
+
+    if (enteredHash !== storedHash) {
+      errBox.innerHTML = '<div class="error-msg">❌ Wrong password.</div>';
+      return;
+    }
+
+    // ✅ Successful login
+    completeLogin(loginFlow.merchantData);
+  }
+
+  function completeLogin(data) {
+    state.merchant = data.merchant || data;
+    state.products = data.products || [];
+    saveLocal();
+    closeModal();
+    loadOrders(); loadPayouts(); loadSettings(); updateOpenStatus();
+    document.getElementById('storeNameTop').textContent = state.merchant.storeName;
+    render();
+    toast("Welcome back, " + state.merchant.storeName + "! 🎉");
+  }
+
+  function backToPhone() {
+    loginFlow = { step: 1, phone: "", email: "", merchantData: null, mode: "login" };
+    renderAuthModal();
+  }
+
+  function backToEmail() {
+    loginFlow.step = 2;
+    renderAuthModal();
+  }
+
+  /* ---------- AUTH: SIGNUP ---------- */
+  async function submitSignup() {
+    const storeName = document.getElementById('sStoreName').value.trim();
+    const ownerName = document.getElementById('sOwnerName').value.trim();
+    const email = document.getElementById('sEmail').value.trim().toLowerCase();
+    const password = document.getElementById('sPassword').value;
+    const confirm = document.getElementById('sConfirm').value;
+    const category = document.getElementById('sCategory').value;
+    const address = document.getElementById('sAddress').value.trim();
+    const hours = document.getElementById('sHours').value.trim();
+    const deliveryArea = document.getElementById('sArea').value.trim();
+    const errBox = document.getElementById('signupError');
+
+    // Validation
+    if (!storeName || !ownerName) return errBox.innerHTML = '<div class="error-msg">Store name and owner name required.</div>';
+    if (!email) return errBox.innerHTML = '<div class="error-msg">Email required.</div>';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return errBox.innerHTML = '<div class="error-msg">Invalid email format.</div>';
+    if (!password || password.length < 6) return errBox.innerHTML = '<div class="error-msg">Password must be at least 6 characters.</div>';
+    if (password !== confirm) return errBox.innerHTML = '<div class="error-msg">Passwords do not match.</div>';
+    if (!address) return errBox.innerHTML = '<div class="error-msg">Address required.</div>';
+
+    // Hash password
+    const passwordHash = await hashPassword(password);
+
+    // Build merchant object
+    state.merchant = {
+      storeName,
+      ownerName,
+      phone: loginFlow.phone,
+      email,
+      passwordHash,
+      securityQ1: storeName,   // answer to "what is the name of shop"
+      securityQ2: ownerName,   // answer to "what is the name of owner"
+      category,
+      address,
+      hours,
+      deliveryArea,
+      createdAt: new Date().toISOString()
+    };
+    state.products = [];
+
+    try {
+      await setDoc(doc(db, "merchants", loginFlow.phone), {
+        merchant: state.merchant,
+        products: [],
+        updatedAt: new Date().toISOString()
+      });
+      saveLocal();
+      closeModal();
+      loadOrders(); loadPayouts(); loadSettings(); updateOpenStatus();
+      document.getElementById('storeNameTop').textContent = state.merchant.storeName;
+      render();
+      toast("Business registered! 🎉");
+    } catch (e) {
+      console.error(e);
+      errBox.innerHTML = '<div class="error-msg">Failed to register. Try again.</div>';
+    }
+  }
+
+  /* ---------- AUTH: PASSWORD RESET ---------- */
+  function startPasswordReset() {
+    loginFlow = { step: 1, phone: "", email: "", merchantData: null, mode: "reset" };
+    renderAuthModal();
+  }
+
+  async function resetSubmitPhone() {
+    const input = document.getElementById('resetPhone').value.trim();
+    const errBox = document.getElementById('resetError');
+    if (!input) { errBox.innerHTML = '<div class="error-msg">Enter phone number.</div>'; return; }
+    const phone = normalizePhone(input);
+    loginFlow.phone = phone;
+    toast("Checking...");
+
+    try {
+      const snap = await getDoc(doc(db, "merchants", phone));
+      if (!snap.exists()) {
+        errBox.innerHTML = '<div class="error-msg">❌ No account found with this number.</div>';
+        return;
+      }
+      loginFlow.merchantData = snap.data();
+      loginFlow.step = 2;
+      renderAuthModal();
+    } catch (e) {
+      console.error(e);
+      errBox.innerHTML = '<div class="error-msg">Network error.</div>';
+    }
+  }
+
+  function resetSubmitEmail() {
+    const email = document.getElementById('resetEmail').value.trim().toLowerCase();
+    const errBox = document.getElementById('resetError');
+    if (!email) { errBox.innerHTML = '<div class="error-msg">Enter email.</div>'; return; }
+
+    const storedEmail = (loginFlow.merchantData?.merchant?.email || "").toLowerCase();
+    if (email !== storedEmail) {
+      errBox.innerHTML = '<div class="error-msg">❌ Data doesn\'t match.</div>';
+      return;
+    }
+
+    loginFlow.email = email;
+    loginFlow.step = 3;
+    renderAuthModal();
+  }
+
+  function resetSubmitQuestions() {
+    const q1 = document.getElementById('resetQ1').value.trim().toLowerCase();
+    const q2 = document.getElementById('resetQ2').value.trim().toLowerCase();
+    const errBox = document.getElementById('resetError');
+
+    if (!q1 && !q2) {
+      errBox.innerHTML = '<div class="error-msg">Answer at least one question.</div>';
+      return;
+    }
+
+    const correct1 = (loginFlow.merchantData?.merchant?.securityQ1 || "").toLowerCase();
+    const correct2 = (loginFlow.merchantData?.merchant?.securityQ2 || "").toLowerCase();
+
+    const q1Correct = q1 && q1 === correct1;
+    const q2Correct = q2 && q2 === correct2;
+
+    if (!q1Correct && !q2Correct) {
+      errBox.innerHTML = '<div class="error-msg">❌ Neither answer matched. Try again.</div>';
+      return;
+    }
+
+    loginFlow.step = 4;
+    renderAuthModal();
+  }
+
+  async function resetSaveNewPassword() {
+    const newPass = document.getElementById('resetNewPass').value;
+    const confirm = document.getElementById('resetNewConfirm').value;
+    const errBox = document.getElementById('resetError');
+
+    if (!newPass || newPass.length < 6) { errBox.innerHTML = '<div class="error-msg">Password must be at least 6 characters.</div>'; return; }
+    if (newPass !== confirm) { errBox.innerHTML = '<div class="error-msg">Passwords do not match.</div>'; return; }
+
+    try {
+      const newHash = await hashPassword(newPass);
+      await updateDoc(doc(db, "merchants", loginFlow.phone), {
+        "merchant.passwordHash": newHash,
+        "merchant.passwordUpdatedAt": new Date().toISOString()
+      });
+      toast("✅ Password reset successful! Please login.");
+      setTimeout(() => openAuth(), 800);
+    } catch (e) {
+      console.error(e);
+      errBox.innerHTML = '<div class="error-msg">Failed to reset. Try again.</div>';
+    }
+  }
+
+  /* ---------- RENDER: HOME ---------- */
   function renderHome() {
     if (!state.merchant) return renderLoginPrompt();
     const today = new Date().toDateString();
@@ -213,6 +664,7 @@ p { font-size: 13px; color: var(--text-light); }
       <div class="card"><div class="toggle-row"><div><b>${state.isOpen ? '🟢 Open' : '🔴 Closed'}</b><p style="font-size:12px;margin-top:2px;">${state.isOpen ? 'Accepting orders' : 'Not accepting'}</p></div><div class="switch ${state.isOpen ? 'on' : ''}" onclick="toggleOpen();render();"></div></div></div>`;
   }
 
+  /* ---------- RENDER: ORDERS ---------- */
   function renderOrders() {
     if (!state.merchant) return renderLoginPrompt();
     if (state.orders.length === 0) return '<div class="empty"><span class="big">📭</span>No orders yet</div>';
@@ -250,6 +702,7 @@ p { font-size: 13px; color: var(--text-light); }
     }).join("")}`;
   }
 
+  /* ---------- RENDER: PRODUCTS ---------- */
   function renderProducts() {
     if (!state.merchant) return renderLoginPrompt();
     if (state.products.length === 0) return `<h2>Products</h2><div class="empty"><span class="big">🍔</span>No products yet</div><button class="btn btn-primary btn-block" onclick="addProductModal()">➕ Add First Product</button>`;
@@ -257,6 +710,7 @@ p { font-size: 13px; color: var(--text-light); }
     return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><h2 style="margin:0;">Products (${state.products.length})</h2><button class="btn btn-primary btn-sm" onclick="addProductModal()">➕ Add</button></div>${Object.keys(grouped).map(cat => `<div class="card"><h3 style="font-size:14px;color:var(--accent);margin-bottom:8px;">${cat}</h3>${grouped[cat].map(p => `<div class="product-item"><div class="prod-info"><h4>${p.name} ${p.stock === false ? '<span style="color:var(--danger);font-size:10px;">(Out of Stock)</span>' : ''}</h4><p>${p.desc || '-'}</p><div class="prod-price">Rs ${p.price}</div></div><div class="prod-actions"><button class="btn btn-outline btn-sm" onclick="addProductModal('${p.id}')">✏️</button><button class="btn btn-outline btn-sm" style="color:var(--danger);" onclick="deleteProduct('${p.id}')">🗑️</button></div></div>`).join("")}</div>`).join("")}`;
   }
 
+  /* ---------- RENDER: EARNINGS ---------- */
   function renderEarnings() {
     if (!state.merchant) return renderLoginPrompt();
     const today = new Date().toDateString();
@@ -296,48 +750,36 @@ p { font-size: 13px; color: var(--text-light); }
     } catch (e) { console.error(e); toast("Failed"); }
   }
 
+  /* ---------- RENDER: PROFILE ---------- */
   function renderProfile() {
     if (!state.merchant) return renderLoginPrompt();
     const cat = CATEGORIES.find(c => c.key === state.merchant.category) || CATEGORIES[5];
     return `<div class="card"><div style="display:flex;align-items:center;gap:16px;"><div style="width:60px;height:60px;border-radius:14px;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:28px;">${cat.emoji}</div><div><h3>${state.merchant.storeName}</h3><p style="font-size:13px;color:var(--text-light);">${state.merchant.phone}</p><p style="font-size:12px;color:var(--accent);margin-top:2px;">${cat.label}</p></div></div></div>
-    <div class="card"><div class="order-row" style="cursor:pointer;padding:14px 0;border-bottom:1px solid var(--border);" onclick="editStore()"><span>🏪 Store Name</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.storeName} ›</span></div><div class="order-row" style="padding:14px 0;border-bottom:1px solid var(--border);"><span>📍 Address</span><span style="color:var(--text-light);font-size:12px;text-align:right;max-width:60%;">${state.merchant.address || 'Not set'}</span></div><div class="order-row" style="cursor:pointer;padding:14px 0;border-bottom:1px solid var(--border);" onclick="editHours()"><span>🕒 Hours</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.hours || 'Not set'} ›</span></div><div class="order-row" style="cursor:pointer;padding:14px 0;" onclick="editDeliveryArea()"><span>🗺️ Delivery Area</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.deliveryArea || 'Not set'} ›</span></div></div>
+    <div class="card">
+      <div class="order-row" style="cursor:pointer;padding:14px 0;border-bottom:1px solid var(--border);" onclick="editStore()"><span>🏪 Store Name</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.storeName} ›</span></div>
+      <div class="order-row" style="padding:14px 0;border-bottom:1px solid var(--border);"><span>👤 Owner</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.ownerName || 'Not set'}</span></div>
+      <div class="order-row" style="padding:14px 0;border-bottom:1px solid var(--border);"><span>✉️ Email</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.email || 'Not set'}</span></div>
+      <div class="order-row" style="padding:14px 0;border-bottom:1px solid var(--border);"><span>📍 Address</span><span style="color:var(--text-light);font-size:12px;text-align:right;max-width:60%;">${state.merchant.address || 'Not set'}</span></div>
+      <div class="order-row" style="cursor:pointer;padding:14px 0;border-bottom:1px solid var(--border);" onclick="editHours()"><span>🕒 Hours</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.hours || 'Not set'} ›</span></div>
+      <div class="order-row" style="cursor:pointer;padding:14px 0;" onclick="editDeliveryArea()"><span>🗺️ Delivery Area</span><span style="color:var(--text-light);font-size:12px;">${state.merchant.deliveryArea || 'Not set'} ›</span></div>
+    </div>
     <div class="card"><div class="toggle-row"><span>💰 Commission Rate</span><span style="font-weight:700;color:var(--accent);">${state.commissionRate}%</span></div><div class="toggle-row"><span>📞 Support</span><span style="font-size:12px;color:var(--text-light);">support@syedgo.com</span></div></div>
     <button class="btn btn-danger btn-block" onclick="logout()">Logout</button>`;
   }
 
-  function editStore() { const name = prompt("Store Name:", state.merchant.storeName); if (!name || !name.trim()) return; state.merchant.storeName = name.trim(); saveLocal(); saveMerchantToFirebase(); render(); toast("Updated"); }
+  function editStore() { const name = prompt("Store Name:", state.merchant.storeName); if (!name || !name.trim()) return; state.merchant.storeName = name.trim(); state.merchant.securityQ1 = name.trim(); saveLocal(); saveMerchantToFirebase(); render(); toast("Updated"); }
   function editHours() { const hours = prompt("Hours:", state.merchant.hours || ""); if (!hours) return; state.merchant.hours = hours; saveLocal(); saveMerchantToFirebase(); render(); toast("Updated"); }
   function editDeliveryArea() { const area = prompt("Delivery Area:", state.merchant.deliveryArea || ""); if (!area) return; state.merchant.deliveryArea = area; saveLocal(); saveMerchantToFirebase(); render(); toast("Updated"); }
 
-  function renderLoginPrompt() { return `<div class="card" style="text-align:center;padding:40px 20px;"><div style="font-size:64px;margin-bottom:16px;">🏪</div><h3 style="margin-bottom:8px;">Welcome to SYEDGO Merchant</h3><p style="color:var(--text-light);font-size:13px;margin-bottom:20px;">Register your business</p><button class="btn btn-primary btn-block" onclick="openAuth()">Login / Register</button></div>`; }
-
-  function openAuth() { document.getElementById("modalRoot").innerHTML = `<div class="overlay" onclick="if(event.target===this)closeModal()"><div class="sheet"><h3>Merchant Login</h3><div id="mStep1"><input class="form-input" id="mPhone" placeholder="+92 300 1234567" type="tel" /><button class="btn btn-primary btn-block" onclick="checkMerchant()">Continue</button></div><div id="mStep2" class="hidden"><p style="text-align:center;margin-bottom:16px;">🏪 Register</p><label class="form-label">Store Name</label><input class="form-input" id="mStoreName" placeholder="Al-Madina Superstore" /><label class="form-label">Category</label><select class="form-input" id="mCategory">${CATEGORIES.map(c => `<option value="${c.key}">${c.emoji} ${c.label}</option>`).join("")}</select><label class="form-label">Address</label><input class="form-input" id="mAddress" placeholder="Mingora, Swat" /><label class="form-label">Hours</label><input class="form-input" id="mHours" value="8:00 AM - 11:00 PM" /><label class="form-label">Delivery Area (optional)</label><input class="form-input" id="mArea" placeholder="Mingora, Saidu" /><button class="btn btn-success btn-block" onclick="registerMerchant()">Register</button><button class="btn btn-outline btn-block" style="margin-top:8px;" onclick="backToStep1()">← Change</button></div><button class="btn btn-outline btn-block" style="margin-top:10px;" onclick="closeModal()">Cancel</button></div></div>`; setTimeout(() => document.getElementById('mPhone')?.focus(), 100); }
-
-  async function checkMerchant() {
-    const input = document.getElementById('mPhone').value.trim(); if (!input) return toast("Enter phone");
-    let phone = input.replace(/[\s\-()]/g, "");
-    if (phone.startsWith("0")) phone = "+92" + phone.slice(1); else if (phone.startsWith("92") && !phone.startsWith("+")) phone = "+" + phone; else if (!phone.startsWith("+")) phone = "+92" + phone;
-    window._mPhone = phone; toast("Checking...");
-    try {
-      const snap = await getDoc(doc(db, "merchants", phone));
-      if (snap.exists()) { const data = snap.data(); state.merchant = data.merchant || data; state.products = data.products || []; saveLocal(); closeModal(); loadOrders(); loadPayouts(); loadSettings(); updateOpenStatus(); document.getElementById('storeNameTop').textContent = state.merchant.storeName; render(); toast("Welcome back! 🎉"); }
-      else { document.getElementById('mStep1').classList.add('hidden'); document.getElementById('mStep2').classList.remove('hidden'); }
-    } catch (e) { console.error(e); toast("Network error"); }
-  }
-
-  function backToStep1() { document.getElementById('mStep2').classList.add('hidden'); document.getElementById('mStep1').classList.remove('hidden'); }
-
-  async function registerMerchant() {
-    const storeName = document.getElementById('mStoreName').value.trim(); const category = document.getElementById('mCategory').value; const address = document.getElementById('mAddress').value.trim(); const hours = document.getElementById('mHours').value.trim(); const deliveryArea = document.getElementById('mArea').value.trim();
-    if (!storeName || !address) return toast("Name and address required");
-    state.merchant = { storeName, phone: window._mPhone, category, address, hours, deliveryArea, createdAt: new Date().toISOString() };
-    state.products = []; saveLocal(); await saveMerchantToFirebase(); closeModal(); loadOrders(); loadPayouts(); loadSettings(); updateOpenStatus(); document.getElementById('storeNameTop').textContent = state.merchant.storeName; render(); toast("Registered! 🎉");
+  function renderLoginPrompt() {
+    return `<div class="card" style="text-align:center;padding:40px 20px;"><div style="font-size:64px;margin-bottom:16px;">🏪</div><h3 style="margin-bottom:8px;">Welcome to SYEDGO Merchant</h3><p style="color:var(--text-light);font-size:13px;margin-bottom:20px;">Register your business</p><button class="btn btn-primary btn-block" onclick="openAuth()">Login / Register</button></div>`;
   }
 
   async function saveMerchantToFirebase() { if (!state.merchant) return; try { await setDoc(doc(db, "merchants", state.merchant.phone), { merchant: state.merchant, products: state.products, updatedAt: new Date().toISOString() }, { merge: true }); } catch (e) { console.error(e); } }
 
   function logout() { if (!confirm("Logout?")) return; if (state.ordersListener) { state.ordersListener(); state.ordersListener = null; } if (state.payoutsListener) { state.payoutsListener(); state.payoutsListener = null; } if (state.settingsListener) { state.settingsListener(); state.settingsListener = null; } state.merchant = null; state.orders = []; state.products = []; state.payouts = []; state.isOpen = false; localStorage.clear(); document.getElementById('storeNameTop').textContent = "SYEDGO Merchant"; updateOpenStatus(); state.tab = "home"; render(); toast("Logged out"); }
 
+  /* ---------- MAIN RENDER ---------- */
   function render() {
     const app = document.getElementById("app"); let html = "";
     if (state.tab === "home") html = renderHome();
@@ -352,12 +794,23 @@ p { font-size: 13px; color: var(--text-light); }
 
   document.querySelectorAll(".bottom-nav button").forEach(btn => { btn.addEventListener("click", () => { state.tab = btn.dataset.tab; render(); window.scrollTo(0, 0); }); });
 
+  /* ---------- INIT ---------- */
   setTimeout(() => { document.getElementById('splash').style.opacity = '0'; setTimeout(() => document.getElementById('splash')?.remove(), 500); }, 2000);
   updateOpenStatus();
-  if (state.merchant) { document.getElementById('storeNameTop').textContent = state.merchant.storeName; loadOrders(); loadPayouts(); loadSettings(); }
+  if (state.merchant && state.merchant.passwordHash) { document.getElementById('storeNameTop').textContent = state.merchant.storeName; loadOrders(); loadPayouts(); loadSettings(); }
+  else if (state.merchant && !state.merchant.passwordHash) { state.merchant = null; localStorage.removeItem("syedgo_merchant"); }
   render();
 
-  window.toggleOpen = toggleOpen; window.acceptOrder = acceptOrder; window.rejectOrder = rejectOrder; window.markReady = markReady; window.addProductModal = addProductModal; window.saveProduct = saveProduct; window.deleteProduct = deleteProduct; window.requestPayout = requestPayout; window.editStore = editStore; window.editHours = editHours; window.editDeliveryArea = editDeliveryArea; window.openAuth = openAuth; window.checkMerchant = checkMerchant; window.backToStep1 = backToStep1; window.registerMerchant = registerMerchant; window.logout = logout; window.closeModal = closeModal; window.toast = toast;
+  // Expose
+  window.toggleOpen = toggleOpen; window.acceptOrder = acceptOrder; window.rejectOrder = rejectOrder; window.markReady = markReady;
+  window.addProductModal = addProductModal; window.saveProduct = saveProduct; window.deleteProduct = deleteProduct;
+  window.requestPayout = requestPayout; window.editStore = editStore; window.editHours = editHours; window.editDeliveryArea = editDeliveryArea;
+  window.openAuth = openAuth; window.closeModal = closeModal; window.toast = toast; window.logout = logout;
+  window.submitPhone = submitPhone; window.submitEmail = submitEmail; window.submitLoginPassword = submitLoginPassword;
+  window.backToPhone = backToPhone; window.backToEmail = backToEmail; window.submitSignup = submitSignup;
+  window.startPasswordReset = startPasswordReset; window.resetSubmitPhone = resetSubmitPhone;
+  window.resetSubmitEmail = resetSubmitEmail; window.resetSubmitQuestions = resetSubmitQuestions;
+  window.resetSaveNewPassword = resetSaveNewPassword;
 </script>
 </body>
 </html>

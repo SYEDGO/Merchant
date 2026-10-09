@@ -105,7 +105,7 @@ p { font-size: 13px; color: var(--text-light); }
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
-  import { getFirestore, doc, setDoc, getDoc, collection, query, where, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+  import { getFirestore, doc, setDoc, getDoc, deleteDoc, collection, query, where, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 
   const firebaseConfig = { apiKey: "AIzaSyDGykbkZ4ITxkEgcxaQNZlH9rFO86c-xEU", authDomain: "syedgo-2027.firebaseapp.com", projectId: "syedgo-2027", storageBucket: "syedgo-2027.firebasestorage.app", messagingSenderId: "827702342584", appId: "1:827702342584:web:a3d717e8b1bcf93529954d", measurementId: "G-L0B1K6N1EY" };
   const app = initializeApp(firebaseConfig);
@@ -127,6 +127,62 @@ p { font-size: 13px; color: var(--text-light); }
   function toast(msg) { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(window._t); window._t = setTimeout(() => t.classList.remove("show"), 3000); }
   function closeModal() { document.getElementById("modalRoot").innerHTML = ""; loginFlow = { step: 0, phone: "", email: "", merchantData: null, mode: "login" }; }
   function saveLocal() { if (state.merchant) localStorage.setItem("syedgo_merchant", JSON.stringify(state.merchant)); localStorage.setItem("syedgo_merchant_open", state.isOpen); }
+
+  // ============================================
+  // FCM PUSH NOTIFICATION SETUP
+  // ============================================
+  async function requestFcmToken() {
+    if (!window.FcmBridge) {
+      console.log('FCM: Not running inside SwatGo native app — skipping');
+      return;
+    }
+    console.log('FCM: Requesting token from native app...');
+    window.onFcmTokenReceived = async function(token) {
+      if (!token) { console.log('FCM: Token not available'); return; }
+      console.log('FCM: Got token:', token);
+      localStorage.setItem('swatgo_fcm_token', token);
+      await saveFcmTokenToFirestore(token);
+    };
+    window.FcmBridge.postMessage('getFcmToken');
+  }
+
+  async function saveFcmTokenToFirestore(token) {
+    if (!state.merchant) { console.log('FCM: No merchant logged in, skip save'); return; }
+    try {
+      await setDoc(doc(db, 'merchants', state.merchant.phone), {
+        'merchant.fcmToken': token,
+        'merchant.fcmTokenUpdatedAt': new Date().toISOString(),
+        'merchant.platform': 'android'
+      }, { merge: true });
+
+      const tokenDocId = state.merchant.phone.replace(/[^0-9]/g, '');
+      await setDoc(doc(db, 'device_tokens', 'merchant_' + tokenDocId), {
+        token: token,
+        userType: 'merchant',
+        userId: state.merchant.phone,
+        userName: state.merchant.storeName,
+        storeName: state.merchant.storeName,
+        updatedAt: new Date().toISOString(),
+        platform: 'android'
+      }, { merge: true });
+
+      console.log('FCM: Token saved to Firestore ✅');
+    } catch (e) { console.error('FCM: Failed to save token:', e); }
+  }
+
+  async function removeFcmToken() {
+    if (!state.merchant) return;
+    try {
+      await setDoc(doc(db, 'merchants', state.merchant.phone), {
+        'merchant.fcmToken': null,
+        'merchant.fcmTokenUpdatedAt': new Date().toISOString()
+      }, { merge: true });
+
+      const tokenDocId = state.merchant.phone.replace(/[^0-9]/g, '');
+      await deleteDoc(doc(db, 'device_tokens', 'merchant_' + tokenDocId));
+      console.log('FCM: Token removed from Firestore');
+    } catch (e) { console.error('FCM: Failed to remove token:', e); }
+  }
 
   async function hashPassword(password) {
     const encoder = new TextEncoder();
@@ -300,6 +356,8 @@ p { font-size: 13px; color: var(--text-light); }
     document.getElementById('storeNameTop').textContent = state.merchant.storeName;
     render();
     toast("Welcome back, " + state.merchant.storeName + "! 🎉");
+    // ⬇️ FCM: register this device for push notifications
+    requestFcmToken();
   }
 
   function backToPhone() { loginFlow = { step: 1, phone: "", email: "", merchantData: null, mode: "login" }; renderAuthModal(); }
@@ -334,6 +392,8 @@ p { font-size: 13px; color: var(--text-light); }
       document.getElementById('storeNameTop').textContent = state.merchant.storeName;
       render();
       toast("Business registered! 🎉");
+      // ⬇️ FCM: register this device for push notifications
+      requestFcmToken();
     } catch (e) { console.error(e); errBox.innerHTML = '<div class="error-msg">Failed to register. Try again.</div>'; }
   }
 
@@ -523,7 +583,21 @@ p { font-size: 13px; color: var(--text-light); }
 
   async function saveMerchantToFirebase() { if (!state.merchant) return; try { await setDoc(doc(db, "merchants", state.merchant.phone), { merchant: state.merchant, products: state.products, updatedAt: new Date().toISOString() }, { merge: true }); } catch (e) { console.error(e); } }
 
-  function logout() { if (!confirm("Logout?")) return; if (state.ordersListener) { state.ordersListener(); state.ordersListener = null; } if (state.payoutsListener) { state.payoutsListener(); state.payoutsListener = null; } if (state.settingsListener) { state.settingsListener(); state.settingsListener = null; } state.merchant = null; state.orders = []; state.products = []; state.payouts = []; state.isOpen = false; localStorage.clear(); document.getElementById('storeNameTop').textContent = "SwatGo Merchant"; updateOpenStatus(); state.tab = "home"; render(); toast("Logged out"); }
+  async function logout() { 
+    if (!confirm("Logout?")) return; 
+    // ⬇️ FCM: remove device token before clearing user
+    await removeFcmToken();
+    if (state.ordersListener) { state.ordersListener(); state.ordersListener = null; } 
+    if (state.payoutsListener) { state.payoutsListener(); state.payoutsListener = null; } 
+    if (state.settingsListener) { state.settingsListener(); state.settingsListener = null; } 
+    state.merchant = null; state.orders = []; state.products = []; state.payouts = []; state.isOpen = false; 
+    localStorage.clear(); 
+    document.getElementById('storeNameTop').textContent = "SwatGo Merchant"; 
+    updateOpenStatus(); 
+    state.tab = "home"; 
+    render(); 
+    toast("Logged out"); 
+  }
 
   function render() {
     const app = document.getElementById("app"); let html = "";
@@ -541,7 +615,7 @@ p { font-size: 13px; color: var(--text-light); }
 
   setTimeout(() => { document.getElementById('splash').style.opacity = '0'; setTimeout(() => document.getElementById('splash')?.remove(), 500); }, 2000);
   updateOpenStatus();
-  if (state.merchant && state.merchant.passwordHash) { document.getElementById('storeNameTop').textContent = state.merchant.storeName; loadOrders(); loadPayouts(); loadSettings(); }
+  if (state.merchant && state.merchant.passwordHash) { document.getElementById('storeNameTop').textContent = state.merchant.storeName; loadOrders(); loadPayouts(); loadSettings(); requestFcmToken(); }
   else if (state.merchant && !state.merchant.passwordHash) { state.merchant = null; localStorage.removeItem("syedgo_merchant"); }
   render();
 

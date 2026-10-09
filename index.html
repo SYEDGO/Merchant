@@ -149,14 +149,8 @@ p { font-size: 13px; color: var(--text-light); }
   async function saveFcmTokenToFirestore(token) {
     if (!state.merchant) { console.log('FCM: No merchant logged in, skip save'); return; }
     try {
-      await setDoc(doc(db, 'merchants', state.merchant.phone), {
-        'merchant.fcmToken': token,
-        'merchant.fcmTokenUpdatedAt': new Date().toISOString(),
-        'merchant.platform': 'android'
-      }, { merge: true });
-
-      const tokenDocId = state.merchant.phone.replace(/[^0-9]/g, '');
-      await setDoc(doc(db, 'device_tokens', 'merchant_' + tokenDocId), {
+      const phoneKey = state.merchant.phone.replace(/[^0-9]/g, '');
+      await setDoc(doc(db, 'device_tokens', 'merchant_' + phoneKey), {
         token: token,
         userType: 'merchant',
         userId: state.merchant.phone,
@@ -165,23 +159,17 @@ p { font-size: 13px; color: var(--text-light); }
         updatedAt: new Date().toISOString(),
         platform: 'android'
       }, { merge: true });
-
-      console.log('FCM: Token saved to Firestore ✅');
-    } catch (e) { console.error('FCM: Failed to save token:', e); }
+      console.log('FCM: Token saved to Firestore ✅ merchant_' + phoneKey);
+    } catch (e) { console.error('FCM: Save failed:', e); }
   }
 
   async function removeFcmToken() {
     if (!state.merchant) return;
     try {
-      await setDoc(doc(db, 'merchants', state.merchant.phone), {
-        'merchant.fcmToken': null,
-        'merchant.fcmTokenUpdatedAt': new Date().toISOString()
-      }, { merge: true });
-
-      const tokenDocId = state.merchant.phone.replace(/[^0-9]/g, '');
-      await deleteDoc(doc(db, 'device_tokens', 'merchant_' + tokenDocId));
+      const phoneKey = state.merchant.phone.replace(/[^0-9]/g, '');
+      await deleteDoc(doc(db, 'device_tokens', 'merchant_' + phoneKey));
       console.log('FCM: Token removed from Firestore');
-    } catch (e) { console.error('FCM: Failed to remove token:', e); }
+    } catch (e) { console.error('FCM: Remove failed:', e); }
   }
 
   async function hashPassword(password) {
@@ -356,7 +344,7 @@ p { font-size: 13px; color: var(--text-light); }
     document.getElementById('storeNameTop').textContent = state.merchant.storeName;
     render();
     toast("Welcome back, " + state.merchant.storeName + "! 🎉");
-    // ⬇️ FCM: register this device for push notifications
+    // FCM: register this device for push notifications
     requestFcmToken();
   }
 
@@ -392,7 +380,7 @@ p { font-size: 13px; color: var(--text-light); }
       document.getElementById('storeNameTop').textContent = state.merchant.storeName;
       render();
       toast("Business registered! 🎉");
-      // ⬇️ FCM: register this device for push notifications
+      // FCM: register this device for push notifications
       requestFcmToken();
     } catch (e) { console.error(e); errBox.innerHTML = '<div class="error-msg">Failed to register. Try again.</div>'; }
   }
@@ -585,7 +573,6 @@ p { font-size: 13px; color: var(--text-light); }
 
   async function logout() { 
     if (!confirm("Logout?")) return; 
-    // ⬇️ FCM: remove device token before clearing user
     await removeFcmToken();
     if (state.ordersListener) { state.ordersListener(); state.ordersListener = null; } 
     if (state.payoutsListener) { state.payoutsListener(); state.payoutsListener = null; } 
